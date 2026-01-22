@@ -1,0 +1,45 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+*.xcworkspace
+!*.xcodeproj/project.xcworkspace/
+xcuserdata/
+*.xccheckout
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+Packages/
+Package.pins
+Package.resolved
+*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+
+# Downloads and data
+Download/
+Downloads/
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+logs/
+*.log
+
+# IDE
+.idea/
+.vscode/
+
+# Temporary files
+*.swp
+*.swo
+*~
