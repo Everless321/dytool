@@ -163,13 +163,13 @@ struct UserListView: View {
             }
         }
         .sheet(isPresented: $showAddSheet) {
-            AddUserSheet(onAdd: { url, mode, maxCounts in
-                addUser(url: url, mode: mode, maxCounts: maxCounts)
+            AddUserSheet(onAdd: { url, mode, maxCounts, nickname in
+                addUser(url: url, mode: mode, maxCounts: maxCounts, nickname: nickname)
             })
         }
         .sheet(item: $selectedUser) { user in
-            EditUserSheet(user: user, onSave: { mode, maxCounts, interval in
-                updateUser(user, mode: mode, maxCounts: maxCounts, interval: interval)
+            EditUserSheet(user: user, onSave: { mode, maxCounts, interval, nickname in
+                updateUser(user, mode: mode, maxCounts: maxCounts, interval: interval, nickname: nickname)
             })
         }
         .sheet(isPresented: $showBatchEditSheet) {
@@ -182,8 +182,8 @@ struct UserListView: View {
         }
     }
 
-    private func addUser(url: String, mode: String, maxCounts: Int) {
-        if let _ = databaseService.addUser(url: url, mode: mode, maxCounts: maxCounts) {
+    private func addUser(url: String, mode: String, maxCounts: Int, nickname: String?) {
+        if let _ = databaseService.addUser(url: url, mode: mode, maxCounts: maxCounts, nickname: nickname) {
             showAddSheet = false
             errorMessage = nil
         } else {
@@ -191,11 +191,12 @@ struct UserListView: View {
         }
     }
 
-    private func updateUser(_ user: DouyinUser, mode: String, maxCounts: Int, interval: String?) {
+    private func updateUser(_ user: DouyinUser, mode: String, maxCounts: Int, interval: String?, nickname: String?) {
         var updated = user
         updated.mode = mode
         updated.maxCounts = maxCounts
         updated.interval = interval
+        updated.nickname = nickname
 
         if databaseService.updateUser(updated) {
             selectedUser = nil
@@ -311,8 +312,9 @@ struct AddUserSheet: View {
     @State private var url = ""
     @State private var mode = "post"
     @State private var maxCounts = 0
+    @State private var nickname = ""
 
-    let onAdd: (String, String, Int) -> Void
+    let onAdd: (String, String, Int, String?) -> Void
 
     var body: some View {
         VStack(spacing: 20) {
@@ -321,6 +323,9 @@ struct AddUserSheet: View {
 
             Form {
                 TextField("抖音用户链接", text: $url)
+                    .textFieldStyle(.roundedBorder)
+
+                TextField("用户名称 (可选)", text: $nickname)
                     .textFieldStyle(.roundedBorder)
 
                 Picker("下载模式", selection: $mode) {
@@ -342,7 +347,7 @@ struct AddUserSheet: View {
                 Spacer()
 
                 Button("添加") {
-                    onAdd(url, mode, maxCounts)
+                    onAdd(url, mode, maxCounts, nickname.isEmpty ? nil : nickname)
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(url.isEmpty)
@@ -361,15 +366,17 @@ struct EditUserSheet: View {
     @State private var mode: String
     @State private var maxCounts: Int
     @State private var interval: String
+    @State private var nickname: String
 
-    let onSave: (String, Int, String?) -> Void
+    let onSave: (String, Int, String?, String?) -> Void
 
-    init(user: DouyinUser, onSave: @escaping (String, Int, String?) -> Void) {
+    init(user: DouyinUser, onSave: @escaping (String, Int, String?, String?) -> Void) {
         self.user = user
         self.onSave = onSave
         _mode = State(initialValue: user.mode)
         _maxCounts = State(initialValue: user.maxCounts)
         _interval = State(initialValue: user.interval ?? "")
+        _nickname = State(initialValue: user.nickname ?? "")
     }
 
     var body: some View {
@@ -377,11 +384,15 @@ struct EditUserSheet: View {
             Text("编辑用户")
                 .font(.headline)
 
-            Text(user.displayName)
-                .font(.subheadline)
+            Text(user.url)
+                .font(.caption)
                 .foregroundColor(.secondary)
+                .lineLimit(1)
 
             Form {
+                TextField("用户名称", text: $nickname)
+                    .textFieldStyle(.roundedBorder)
+
                 Picker("下载模式", selection: $mode) {
                     ForEach(DownloadMode.allModes) { m in
                         Text(m.label).tag(m.id)
@@ -404,7 +415,7 @@ struct EditUserSheet: View {
                 Spacer()
 
                 Button("保存") {
-                    onSave(mode, maxCounts, interval.isEmpty ? nil : interval)
+                    onSave(mode, maxCounts, interval.isEmpty ? nil : interval, nickname.isEmpty ? nil : nickname)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)

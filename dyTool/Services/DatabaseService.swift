@@ -160,7 +160,7 @@ class DatabaseService: ObservableObject {
         return result
     }
 
-    func addUser(url: String, mode: String = "post", maxCounts: Int = 0) -> DouyinUser? {
+    func addUser(url: String, mode: String = "post", maxCounts: Int = 0, nickname: String? = nil) -> DouyinUser? {
         // 验证 URL 不为空
         let trimmedUrl = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedUrl.isEmpty else {
@@ -169,7 +169,7 @@ class DatabaseService: ObservableObject {
         }
 
         let id = "user_\(UUID().uuidString.prefix(8))"
-        let sql = "INSERT INTO users (id, url, mode, max_counts) VALUES (?, ?, ?, ?)"
+        let sql = "INSERT INTO users (id, url, mode, max_counts, nickname) VALUES (?, ?, ?, ?, ?)"
 
         var statement: OpaquePointer?
         if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
@@ -177,10 +177,15 @@ class DatabaseService: ObservableObject {
             sqlite3_bind_text(statement, 2, trimmedUrl, -1, SQLITE_TRANSIENT)
             sqlite3_bind_text(statement, 3, mode, -1, SQLITE_TRANSIENT)
             sqlite3_bind_int(statement, 4, Int32(maxCounts))
+            if let nickname = nickname, !nickname.isEmpty {
+                sqlite3_bind_text(statement, 5, nickname, -1, SQLITE_TRANSIENT)
+            } else {
+                sqlite3_bind_null(statement, 5)
+            }
 
             if sqlite3_step(statement) == SQLITE_DONE {
                 sqlite3_finalize(statement)
-                let user = DouyinUser(id: id, url: trimmedUrl, mode: mode, maxCounts: maxCounts)
+                let user = DouyinUser(id: id, url: trimmedUrl, mode: mode, maxCounts: maxCounts, nickname: nickname)
                 DispatchQueue.main.async {
                     self.users.insert(user, at: 0)
                 }
