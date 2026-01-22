@@ -22,6 +22,12 @@ struct VideoGalleryView: View {
     // 图集查看
     @State private var viewingImageSet: LocalVideo?
 
+    // 分页加载
+    @State private var allVideoPaths: [URL] = []  // 所有视频/图集路径
+    @State private var loadedCount: Int = 0
+    @State private var isLoadingMore = false
+    private let pageSize = 30  // 每页加载数量
+
     // 分析数据
     @State private var analysisMap: [String: VideoAnalysis] = [:]
 
@@ -148,7 +154,7 @@ struct VideoGalleryView: View {
 
                     Spacer()
 
-                    Text("\(filteredVideos.count) / \(videos.count) 个视频")
+                    Text("\(filteredVideos.count) / \(allVideoPaths.count) 个")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
 
@@ -220,6 +226,9 @@ struct VideoGalleryView: View {
                                 }
                             }
                             .padding()
+
+                            // 加载更多触发器
+                            loadMoreTrigger
                         case .list:
                             LazyVStack(spacing: 8) {
                                 ForEach(filteredVideos) { video in
@@ -235,6 +244,9 @@ struct VideoGalleryView: View {
                                 }
                             }
                             .padding()
+
+                            // 加载更多触发器
+                            loadMoreTrigger
                         }
                     }
                 }
@@ -269,6 +281,42 @@ struct VideoGalleryView: View {
         }
         .onChange(of: selectedFolder) { _, _ in
             loadVideos()
+        }
+    }
+
+    // MARK: - 加载更多触发器
+
+    @ViewBuilder
+    private var loadMoreTrigger: some View {
+        if hasMoreVideos {
+            HStack {
+                Spacer()
+                if isLoadingMore {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("加载中...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("已加载 \(videos.count) / \(allVideoPaths.count)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+            }
+            .padding()
+            .onAppear {
+                loadMoreVideos()
+            }
+        } else if !videos.isEmpty {
+            HStack {
+                Spacer()
+                Text("已加载全部 \(videos.count) 个")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+            }
+            .padding()
         }
     }
 
@@ -486,17 +534,16 @@ struct VideoGalleryView: View {
     private func loadVideos() {
         isLoading = true
         videos = []
+        allVideoPaths = []
+        loadedCount = 0
 
         DispatchQueue.global(qos: .userInitiated).async {
             let path = databaseService.settings.path
             let downloadDir = URL(fileURLWithPath: path)
 
-            var loadedVideos: [LocalVideo] = []
-
             let searchDir: URL
             if let folderName = selectedFolder,
                let folder = folders.first(where: { $0.name == folderName }) {
-                // 使用文件夹的完整路径
                 searchDir = URL(fileURLWithPath: folder.path)
             } else {
                 searchDir = downloadDir
@@ -509,35 +556,70 @@ struct VideoGalleryView: View {
                 return
             }
 
+            // 先收集所有文件路径
+            var paths: [(url: URL, date: Date)] = []
             if let enumerator = FileManager.default.enumerator(
                 at: searchDir,
-                includingPropertiesForKeys: [.fileSizeKey, .creationDateKey],
+                includingPropertiesForKeys: [.creationDateKey],
                 options: [.skipsHiddenFiles]
             ) {
                 for case let fileURL as URL in enumerator {
-                    if isVideoFile(fileURL) {
-                        var video = createLocalVideo(from: fileURL, basePath: downloadDir.path)
-                        // 附加分析数据
-                        video.analysis = self.analysisMap[video.awemeId]
-                        loadedVideos.append(video)
-                    } else if isImageSetCover(fileURL) {
-                        // 加载图集
-                        if var imageSet = createLocalImageSet(from: fileURL, basePath: downloadDir.path) {
-                            imageSet.analysis = self.analysisMap[imageSet.awemeId]
-                            loadedVideos.append(imageSet)
-                        }
+                    if isVideoFile(fileURL) || isImageSetCover(fileURL) {
+                        let date = (try? fileURL.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? Date.distantPast
+                        paths.append((fileURL, date))
                     }
                 }
             }
 
-            // 按修改时间排序
-            loadedVideos.sort { $0.createdAt > $1.createdAt }
+            // 按创建时间排序
+            paths.sort { $0.date > $1.date }
+            let sortedPaths = paths.map { $0.url }
 
             DispatchQueue.main.async {
-                self.videos = loadedVideos
+                self.allVideoPaths = sortedPaths
                 self.isLoading = false
+                // 加载第一页
+                self.loadMoreVideos()
             }
         }
+    }
+
+    private func loadMoreVideos() {
+        guard !isLoadingMore else { return }
+        guard loadedCount < allVideoPaths.count else { return }
+
+        isLoadingMore = true
+        let startIndex = loadedCount
+        let endIndex = min(loadedCount + pageSize, allVideoPaths.count)
+        let pathsToLoad = Array(allVideoPaths[startIndex..<endIndex])
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let basePath = databaseService.settings.path
+            var newVideos: [LocalVideo] = []
+
+            for fileURL in pathsToLoad {
+                if isVideoFile(fileURL) {
+                    var video = createLocalVideo(from: fileURL, basePath: basePath)
+                    video.analysis = self.analysisMap[video.awemeId]
+                    newVideos.append(video)
+                } else if isImageSetCover(fileURL) {
+                    if var imageSet = createLocalImageSet(from: fileURL, basePath: basePath) {
+                        imageSet.analysis = self.analysisMap[imageSet.awemeId]
+                        newVideos.append(imageSet)
+                    }
+                }
+            }
+
+            DispatchQueue.main.async {
+                self.videos.append(contentsOf: newVideos)
+                self.loadedCount = endIndex
+                self.isLoadingMore = false
+            }
+        }
+    }
+
+    private var hasMoreVideos: Bool {
+        loadedCount < allVideoPaths.count
     }
 
     private func isVideoFile(_ url: URL) -> Bool {
@@ -842,6 +924,12 @@ struct LocalVideoGridItem: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(video.filename)
                     .font(.caption)
+                    .lineLimit(1)
+
+                // 作者名称
+                Text(video.folder)
+                    .font(.caption2)
+                    .foregroundColor(.blue)
                     .lineLimit(1)
 
                 // 分析标签
