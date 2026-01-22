@@ -606,6 +606,8 @@ struct VideoGalleryView: View {
             DispatchQueue.main.async {
                 self.allVideoPaths = sortedPaths
                 self.isLoading = false
+                // 更新可用的过滤选项（只显示存在的视频的标签）
+                self.updateAvailableFilters()
                 // 加载第一页
                 self.loadMoreVideos()
             }
@@ -802,16 +804,25 @@ struct VideoGalleryView: View {
     private func loadAnalysisData() {
         let allAnalysis = databaseService.getAllAnalysis()
         analysisMap = Dictionary(uniqueKeysWithValues: allAnalysis.map { ($0.awemeId, $0) })
+        // 标签和分类会在视频加载后更新
+    }
 
-        // 收集所有标签和分类
+    // 根据实际存在的视频更新可用标签
+    private func updateAvailableFilters() {
         var tags = Set<String>()
         var categories = Set<String>()
-        for analysis in allAnalysis {
-            tags.formUnion(analysis.tags)
-            if !analysis.category.isEmpty {
-                categories.insert(analysis.category)
+
+        // 从所有视频路径中提取 awemeId，检查是否有分析数据
+        for path in allVideoPaths {
+            let awemeId = path.deletingPathExtension().lastPathComponent
+            if let analysis = analysisMap[awemeId] {
+                tags.formUnion(analysis.tags)
+                if !analysis.category.isEmpty {
+                    categories.insert(analysis.category)
+                }
             }
         }
+
         availableTags = Array(tags).sorted()
         availableCategories = Array(categories).sorted()
     }
