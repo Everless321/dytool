@@ -8,36 +8,41 @@
 
 ## f2-cli 准备
 
-dyTool 依赖 f2 项目的命令行工具进行视频下载。需要先准备 f2-cli 二进制文件。
+dyTool 依赖 [f2](https://github.com/JoeanAmier/f2) 项目进行视频下载。f2 是一个 Python 项目，需要通过 pip 安装后使用 PyInstaller 打包成独立可执行文件。
 
-### 方式一：从 f2 Release 下载（推荐）
-
-1. 访问 [f2 Releases](https://github.com/JoeanAmier/f2/releases)
-2. 下载最新的 macOS arm64 版本
-3. 解压后重命名为 `f2-cli`
-4. 放入 `dyTool/Resources/` 目录
-
-### 方式二：从源码编译
-
-f2 是一个 Python 项目，可以使用 PyInstaller 打包成独立可执行文件：
+### 打包步骤
 
 ```bash
-# 1. 克隆 f2 仓库
-git clone https://github.com/JoeanAmier/f2.git
-cd f2
+# 1. 安装 f2
+pip install f2
 
-# 2. 创建虚拟环境
-python3 -m venv venv
-source venv/bin/activate
-
-# 3. 安装依赖
-pip install -r requirements.txt
+# 2. 安装 PyInstaller
 pip install pyinstaller
 
+# 3. 找到 f2 安装位置
+python -c "import f2; print(f2.__path__[0])"
+
 # 4. 打包为单文件可执行程序
-pyinstaller --onefile --name f2-cli f2/__main__.py
+pyinstaller --onefile --name f2-cli $(python -c "import f2; print(f2.__path__[0])")/__main__.py
 
 # 5. 输出文件在 dist/f2-cli
+```
+
+或者在虚拟环境中操作：
+
+```bash
+# 1. 创建虚拟环境
+python3 -m venv f2env
+source f2env/bin/activate
+
+# 2. 安装 f2 和 PyInstaller
+pip install f2 pyinstaller
+
+# 3. 打包
+pyinstaller --onefile --name f2-cli $(python -c "import f2; print(f2.__path__[0])")/__main__.py
+
+# 4. 输出文件在 dist/f2-cli
+deactivate
 ```
 
 ### f2-cli 验证
