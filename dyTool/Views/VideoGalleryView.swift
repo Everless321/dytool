@@ -48,6 +48,16 @@ struct VideoGalleryView: View {
         case grid, list
     }
 
+    // 是否有活跃的过滤条件
+    private var hasActiveFilters: Bool {
+        (selectedAuthor != nil && !selectedAuthor!.isEmpty) ||
+        onlyAnalyzed ||
+        minSexyLevel > 0 ||
+        maxSexyLevel < 10 ||
+        !selectedTags.isEmpty ||
+        (selectedCategory != nil && !selectedCategory!.isEmpty)
+    }
+
     // 过滤后的视频
     private var filteredVideos: [LocalVideo] {
         videos.filter { video in
@@ -323,6 +333,31 @@ struct VideoGalleryView: View {
         }
         .onChange(of: selectedFolder) { _, _ in
             loadVideos()
+        }
+        .onChange(of: selectedAuthor) { _, newValue in
+            if newValue != nil && !newValue!.isEmpty && hasMoreVideos {
+                loadAllVideosForFiltering()
+            }
+        }
+        .onChange(of: selectedTags) { _, newValue in
+            if !newValue.isEmpty && hasMoreVideos {
+                loadAllVideosForFiltering()
+            }
+        }
+        .onChange(of: selectedCategory) { _, newValue in
+            if newValue != nil && !newValue!.isEmpty && hasMoreVideos {
+                loadAllVideosForFiltering()
+            }
+        }
+        .onChange(of: minSexyLevel) { _, newValue in
+            if newValue > 0 && hasMoreVideos {
+                loadAllVideosForFiltering()
+            }
+        }
+        .onChange(of: onlyAnalyzed) { _, newValue in
+            if newValue && hasMoreVideos {
+                loadAllVideosForFiltering()
+            }
         }
     }
 
@@ -650,6 +685,39 @@ struct VideoGalleryView: View {
 
     private var hasMoreVideos: Bool {
         loadedCount < allVideoPaths.count
+    }
+
+    // 当有过滤条件时，加载所有剩余视频
+    private func loadAllVideosForFiltering() {
+        guard hasMoreVideos else { return }
+
+        isLoadingMore = true
+        let startIndex = loadedCount
+        let pathsToLoad = Array(allVideoPaths[startIndex...])
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let basePath = databaseService.settings.path
+            var newVideos: [LocalVideo] = []
+
+            for fileURL in pathsToLoad {
+                if isVideoFile(fileURL) {
+                    var video = createLocalVideo(from: fileURL, basePath: basePath)
+                    video.analysis = self.analysisMap[video.awemeId]
+                    newVideos.append(video)
+                } else if isImageSetCover(fileURL) {
+                    if var imageSet = createLocalImageSet(from: fileURL, basePath: basePath) {
+                        imageSet.analysis = self.analysisMap[imageSet.awemeId]
+                        newVideos.append(imageSet)
+                    }
+                }
+            }
+
+            DispatchQueue.main.async {
+                self.videos.append(contentsOf: newVideos)
+                self.loadedCount = self.allVideoPaths.count
+                self.isLoadingMore = false
+            }
+        }
     }
 
     private func isVideoFile(_ url: URL) -> Bool {
