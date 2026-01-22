@@ -19,6 +19,9 @@ struct VideoGalleryView: View {
     @State private var playingVideo: LocalVideo?
     @State private var player: AVPlayer?
 
+    // 图集查看
+    @State private var viewingImageSet: LocalVideo?
+
     // 分析数据
     @State private var analysisMap: [String: VideoAnalysis] = [:]
 
@@ -206,7 +209,11 @@ struct VideoGalleryView: View {
                             LazyVGrid(columns: columns, spacing: 12) {
                                 ForEach(filteredVideos) { video in
                                     LocalVideoGridItem(video: video, onPlay: {
-                                        playVideo(video)
+                                        if video.isImageSet {
+                                            viewingImageSet = video
+                                        } else {
+                                            playVideo(video)
+                                        }
                                     }, onDelete: {
                                         deleteVideo(video)
                                     })
@@ -217,7 +224,11 @@ struct VideoGalleryView: View {
                             LazyVStack(spacing: 8) {
                                 ForEach(filteredVideos) { video in
                                     LocalVideoListItem(video: video, onPlay: {
-                                        playVideo(video)
+                                        if video.isImageSet {
+                                            viewingImageSet = video
+                                        } else {
+                                            playVideo(video)
+                                        }
                                     }, onDelete: {
                                         deleteVideo(video)
                                     })
@@ -237,6 +248,16 @@ struct VideoGalleryView: View {
                     player: player,
                     onClose: {
                         stopVideo()
+                    }
+                )
+            }
+
+            // 图集查看器覆盖层
+            if let imageSet = viewingImageSet {
+                ImageSetViewer(
+                    imageSet: imageSet,
+                    onClose: {
+                        viewingImageSet = nil
                     }
                 )
             }
@@ -455,7 +476,7 @@ struct VideoGalleryView: View {
 
         var count = 0
         for case let fileURL as URL in enumerator {
-            if isVideoFile(fileURL) {
+            if isVideoFile(fileURL) || isImageSetCover(fileURL) {
                 count += 1
             }
         }
@@ -499,6 +520,12 @@ struct VideoGalleryView: View {
                         // 附加分析数据
                         video.analysis = self.analysisMap[video.awemeId]
                         loadedVideos.append(video)
+                    } else if isImageSetCover(fileURL) {
+                        // 加载图集
+                        if var imageSet = createLocalImageSet(from: fileURL, basePath: downloadDir.path) {
+                            imageSet.analysis = self.analysisMap[imageSet.awemeId]
+                            loadedVideos.append(imageSet)
+                        }
                     }
                 }
             }
@@ -516,6 +543,84 @@ struct VideoGalleryView: View {
     private func isVideoFile(_ url: URL) -> Bool {
         let videoExtensions = ["mp4", "mov", "avi", "mkv", "webm", "m4v"]
         return videoExtensions.contains(url.pathExtension.lowercased())
+    }
+
+    private func isImageSetCover(_ url: URL) -> Bool {
+        let filename = url.lastPathComponent.lowercased()
+        let imageExtensions = ["jpeg", "jpg", "webp", "png"]
+        let ext = url.pathExtension.lowercased()
+
+        // 检查是否是 _cover 文件
+        return imageExtensions.contains(ext) && filename.contains("_cover.")
+    }
+
+    private func createLocalImageSet(from coverURL: URL, basePath: String) -> LocalVideo? {
+        let folder = coverURL.deletingLastPathComponent()
+        let coverFilename = coverURL.deletingPathExtension().lastPathComponent
+
+        // 获取基础名（去掉 _cover 后缀）
+        guard let range = coverFilename.range(of: "_cover", options: .backwards) else {
+            return nil
+        }
+        let baseName = String(coverFilename[..<range.lowerBound])
+
+        // 查找所有关联的图片
+        var imagePaths: [String] = []
+        if let contents = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) {
+            for file in contents {
+                let fileName = file.lastPathComponent
+                // 匹配 baseName_image_N.webp 格式
+                if fileName.hasPrefix(baseName + "_image_") {
+                    imagePaths.append(file.path)
+                }
+            }
+        }
+
+        // 没有图片则跳过
+        guard !imagePaths.isEmpty else { return nil }
+
+        // 按数字排序
+        imagePaths.sort { path1, path2 in
+            let num1 = extractImageNumber(from: path1)
+            let num2 = extractImageNumber(from: path2)
+            return num1 < num2
+        }
+
+        let authorFolder = coverURL.deletingLastPathComponent().lastPathComponent
+
+        var size: Int = 0
+        var createdAt = Date()
+
+        // 计算总大小
+        for imagePath in imagePaths {
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: imagePath) {
+                size += (attrs[.size] as? Int) ?? 0
+            }
+        }
+
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: coverURL.path) {
+            createdAt = (attrs[.creationDate] as? Date) ?? Date()
+        }
+
+        return LocalVideo(
+            path: coverURL.path,
+            filename: baseName,
+            folder: authorFolder,
+            size: size,
+            createdAt: createdAt,
+            coverPath: coverURL.path,
+            isImageSet: true,
+            imagePaths: imagePaths
+        )
+    }
+
+    private func extractImageNumber(from path: String) -> Int {
+        let filename = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+        if let range = filename.range(of: "_image_", options: .backwards) {
+            let numStr = String(filename[range.upperBound...])
+            return Int(numStr) ?? 0
+        }
+        return 0
     }
 
     private func createLocalVideo(from url: URL, basePath: String) -> LocalVideo {
@@ -638,6 +743,10 @@ struct LocalVideo: Identifiable {
     let coverPath: String?
     var analysis: VideoAnalysis?
 
+    // 图集支持
+    var isImageSet: Bool = false
+    var imagePaths: [String] = []
+
     var id: String { path }
 
     var awemeId: String {
@@ -654,6 +763,10 @@ struct LocalVideo: Identifiable {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm"
         return formatter.string(from: createdAt)
+    }
+
+    var imageCount: Int {
+        imagePaths.count
     }
 }
 
@@ -688,7 +801,7 @@ struct LocalVideoGridItem: View {
                         Button {
                             onPlay()
                         } label: {
-                            Image(systemName: "play.circle.fill")
+                            Image(systemName: video.isImageSet ? "photo.stack" : "play.circle.fill")
                                 .font(.system(size: 40))
                                 .foregroundColor(.white)
                         }
@@ -696,10 +809,26 @@ struct LocalVideoGridItem: View {
                     }
                 }
 
+                // 图集角标
+                if video.isImageSet {
+                    HStack(spacing: 2) {
+                        Image(systemName: "photo.stack.fill")
+                            .font(.caption2)
+                        Text("\(video.imageCount)")
+                            .font(.caption2)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(4)
+                    .padding(4)
+                }
+
                 // 擦边等级角标
                 if let analysis = video.analysis, analysis.sexyLevel > 0 {
                     SexyLevelBadge(level: analysis.sexyLevel)
                         .padding(4)
+                        .offset(y: video.isImageSet ? 28 : 0)
                 }
             }
             .onHover { hovering in
@@ -1183,6 +1312,152 @@ struct VideoThumbnailView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - 图集查看器
+
+struct ImageSetViewer: View {
+    let imageSet: LocalVideo
+    let onClose: () -> Void
+
+    @State private var currentIndex: Int = 0
+
+    var body: some View {
+        ZStack {
+            // 背景
+            Color.black.opacity(0.9)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    onClose()
+                }
+
+            VStack(spacing: 0) {
+                // 顶部栏
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(imageSet.filename)
+                            .font(.headline)
+                            .foregroundColor(.white)
+
+                        Text("\(currentIndex + 1) / \(imageSet.imageCount) 张")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.7))
+                    }
+
+                    Spacer()
+
+                    Button {
+                        if let path = imageSet.imagePaths[safe: currentIndex] {
+                            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                        }
+                    } label: {
+                        Image(systemName: "folder")
+                            .font(.title2)
+                            .foregroundColor(.white)
+                    }
+                    .buttonStyle(.plain)
+                    .help("在访达中显示")
+
+                    Button {
+                        onClose()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title)
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.escape, modifiers: [])
+                }
+                .padding()
+
+                // 图片显示区域
+                ZStack {
+                    if let imagePath = imageSet.imagePaths[safe: currentIndex],
+                       let nsImage = NSImage(contentsOfFile: imagePath) {
+                        Image(nsImage: nsImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        Text("无法加载图片")
+                            .foregroundColor(.white)
+                    }
+
+                    // 左右切换按钮
+                    HStack {
+                        Button {
+                            if currentIndex > 0 {
+                                currentIndex -= 1
+                            }
+                        } label: {
+                            Image(systemName: "chevron.left.circle.fill")
+                                .font(.system(size: 40))
+                                .foregroundColor(.white.opacity(currentIndex > 0 ? 0.8 : 0.3))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(currentIndex == 0)
+                        .keyboardShortcut(.leftArrow, modifiers: [])
+
+                        Spacer()
+
+                        Button {
+                            if currentIndex < imageSet.imageCount - 1 {
+                                currentIndex += 1
+                            }
+                        } label: {
+                            Image(systemName: "chevron.right.circle.fill")
+                                .font(.system(size: 40))
+                                .foregroundColor(.white.opacity(currentIndex < imageSet.imageCount - 1 ? 0.8 : 0.3))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(currentIndex >= imageSet.imageCount - 1)
+                        .keyboardShortcut(.rightArrow, modifiers: [])
+                    }
+                    .padding(.horizontal, 20)
+                }
+
+                // 底部缩略图栏
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(Array(imageSet.imagePaths.enumerated()), id: \.offset) { index, path in
+                                if let nsImage = NSImage(contentsOfFile: path) {
+                                    Image(nsImage: nsImage)
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fill)
+                                        .frame(width: 60, height: 80)
+                                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 4)
+                                                .stroke(currentIndex == index ? Color.white : Color.clear, lineWidth: 2)
+                                        )
+                                        .opacity(currentIndex == index ? 1 : 0.6)
+                                        .onTapGesture {
+                                            currentIndex = index
+                                        }
+                                        .id(index)
+                                }
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
+                    .frame(height: 100)
+                    .onChange(of: currentIndex) { _, newIndex in
+                        withAnimation {
+                            proxy.scrollTo(newIndex, anchor: .center)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// 安全数组访问扩展
+extension Array {
+    subscript(safe index: Index) -> Element? {
+        return indices.contains(index) ? self[index] : nil
     }
 }
 
