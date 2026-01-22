@@ -222,6 +222,14 @@ struct VideoGalleryView: View {
                                         }
                                     }, onDelete: {
                                         deleteVideo(video)
+                                    }, onAuthorTap: { author in
+                                        // 跳转到该作者的视频
+                                        selectedAuthor = author
+                                        showFilters = true
+                                    }, onTagTap: { tag in
+                                        // 添加标签过滤
+                                        selectedTags.insert(tag)
+                                        showFilters = true
                                     })
                                     .onAppear {
                                         // 当显示最后几个元素时触发加载更多
@@ -248,6 +256,12 @@ struct VideoGalleryView: View {
                                         }
                                     }, onDelete: {
                                         deleteVideo(video)
+                                    }, onAuthorTap: { author in
+                                        selectedAuthor = author
+                                        showFilters = true
+                                    }, onTagTap: { tag in
+                                        selectedTags.insert(tag)
+                                        showFilters = true
                                     })
                                     .onAppear {
                                         // 当显示最后几个元素时触发加载更多
@@ -872,6 +886,8 @@ struct LocalVideoGridItem: View {
     let video: LocalVideo
     let onPlay: () -> Void
     let onDelete: () -> Void
+    var onAuthorTap: ((String) -> Void)?
+    var onTagTap: ((String) -> Void)?
     @State private var isHovering = false
 
     var body: some View {
@@ -940,11 +956,14 @@ struct LocalVideoGridItem: View {
                     .font(.caption)
                     .lineLimit(1)
 
-                // 作者名称
+                // 作者名称 - 可点击
                 Text(video.folder)
                     .font(.caption2)
                     .foregroundColor(.blue)
                     .lineLimit(1)
+                    .onTapGesture {
+                        onAuthorTap?(video.folder)
+                    }
 
                 // 分析标签
                 if let analysis = video.analysis {
@@ -963,7 +982,7 @@ struct LocalVideoGridItem: View {
                             .foregroundColor(.secondary)
                     }
 
-                    // 显示前3个标签
+                    // 显示前3个标签 - 可点击
                     if !analysis.tags.isEmpty {
                         HStack(spacing: 4) {
                             ForEach(analysis.tags.prefix(3), id: \.self) { tag in
@@ -973,6 +992,9 @@ struct LocalVideoGridItem: View {
                                     .padding(.vertical, 1)
                                     .background(Color.gray.opacity(0.2))
                                     .cornerRadius(2)
+                                    .onTapGesture {
+                                        onTagTap?(tag)
+                                    }
                             }
                             if analysis.tags.count > 3 {
                                 Text("+\(analysis.tags.count - 3)")
@@ -1012,6 +1034,8 @@ struct LocalVideoListItem: View {
     let video: LocalVideo
     let onPlay: () -> Void
     let onDelete: () -> Void
+    var onAuthorTap: ((String) -> Void)?
+    var onTagTap: ((String) -> Void)?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -1044,9 +1068,13 @@ struct LocalVideoListItem: View {
                     .lineLimit(1)
 
                 HStack(spacing: 12) {
+                    // 作者名称 - 可点击
                     Text(video.folder)
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(.blue)
+                        .onTapGesture {
+                            onAuthorTap?(video.folder)
+                        }
 
                     Text(video.formattedSize)
                         .font(.caption)
@@ -1067,7 +1095,7 @@ struct LocalVideoListItem: View {
                     }
                 }
 
-                // 标签
+                // 标签 - 可点击
                 if let analysis = video.analysis, !analysis.tags.isEmpty {
                     HStack(spacing: 4) {
                         ForEach(analysis.tags.prefix(5), id: \.self) { tag in
@@ -1077,6 +1105,9 @@ struct LocalVideoListItem: View {
                                 .padding(.vertical, 1)
                                 .background(Color.gray.opacity(0.2))
                                 .cornerRadius(3)
+                                .onTapGesture {
+                                    onTagTap?(tag)
+                                }
                         }
                         if analysis.tags.count > 5 {
                             Text("+\(analysis.tags.count - 5)")
