@@ -213,7 +213,7 @@ struct VideoGalleryView: View {
                         switch viewMode {
                         case .grid:
                             LazyVGrid(columns: columns, spacing: 12) {
-                                ForEach(filteredVideos) { video in
+                                ForEach(Array(filteredVideos.enumerated()), id: \.element.id) { index, video in
                                     LocalVideoGridItem(video: video, onPlay: {
                                         if video.isImageSet {
                                             viewingImageSet = video
@@ -223,15 +223,23 @@ struct VideoGalleryView: View {
                                     }, onDelete: {
                                         deleteVideo(video)
                                     })
+                                    .onAppear {
+                                        // 当显示最后几个元素时触发加载更多
+                                        if index >= filteredVideos.count - 6 {
+                                            loadMoreVideos()
+                                        }
+                                    }
+                                }
+
+                                // 加载状态显示
+                                if hasMoreVideos {
+                                    loadingIndicator
                                 }
                             }
                             .padding()
-
-                            // 加载更多触发器
-                            loadMoreTrigger
                         case .list:
                             LazyVStack(spacing: 8) {
-                                ForEach(filteredVideos) { video in
+                                ForEach(Array(filteredVideos.enumerated()), id: \.element.id) { index, video in
                                     LocalVideoListItem(video: video, onPlay: {
                                         if video.isImageSet {
                                             viewingImageSet = video
@@ -241,12 +249,32 @@ struct VideoGalleryView: View {
                                     }, onDelete: {
                                         deleteVideo(video)
                                     })
+                                    .onAppear {
+                                        // 当显示最后几个元素时触发加载更多
+                                        if index >= filteredVideos.count - 6 {
+                                            loadMoreVideos()
+                                        }
+                                    }
+                                }
+
+                                // 加载状态显示
+                                if hasMoreVideos {
+                                    loadingIndicator
                                 }
                             }
                             .padding()
+                        }
 
-                            // 加载更多触发器
-                            loadMoreTrigger
+                        // 底部状态
+                        if !hasMoreVideos && !videos.isEmpty {
+                            HStack {
+                                Spacer()
+                                Text("已加载全部 \(allVideoPaths.count) 个")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                            }
+                            .padding()
                         }
                     }
                 }
@@ -284,40 +312,26 @@ struct VideoGalleryView: View {
         }
     }
 
-    // MARK: - 加载更多触发器
+    // MARK: - 加载指示器
 
     @ViewBuilder
-    private var loadMoreTrigger: some View {
-        if hasMoreVideos {
-            HStack {
-                Spacer()
-                if isLoadingMore {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                    Text("加载中...")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                } else {
-                    Text("已加载 \(videos.count) / \(allVideoPaths.count)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                Spacer()
-            }
-            .padding()
-            .onAppear {
-                loadMoreVideos()
-            }
-        } else if !videos.isEmpty {
-            HStack {
-                Spacer()
-                Text("已加载全部 \(videos.count) 个")
+    private var loadingIndicator: some View {
+        HStack {
+            Spacer()
+            if isLoadingMore {
+                ProgressView()
+                    .scaleEffect(0.8)
+                Text("加载中...")
                     .font(.caption)
                     .foregroundColor(.secondary)
-                Spacer()
+            } else {
+                Text("已加载 \(videos.count) / \(allVideoPaths.count)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
-            .padding()
+            Spacer()
         }
+        .padding(.vertical, 8)
     }
 
     // MARK: - 过滤器面板
