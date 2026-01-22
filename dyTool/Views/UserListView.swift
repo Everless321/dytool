@@ -355,6 +355,26 @@ struct AddUserSheet: View {
         }
         .padding()
         .frame(width: 400)
+        .onAppear {
+            extractDouyinUrlFromPasteboard()
+        }
+    }
+
+    private func extractDouyinUrlFromPasteboard() {
+        guard let pasteboardString = NSPasteboard.general.string(forType: .string) else { return }
+
+        // 匹配抖音链接: https://v.douyin.com/xxx 或 https://www.douyin.com/user/xxx
+        let patterns = [
+            #"https://v\.douyin\.com/[A-Za-z0-9]+/?"#,
+            #"https://www\.douyin\.com/user/[A-Za-z0-9_-]+"#
+        ]
+
+        for pattern in patterns {
+            if let range = pasteboardString.range(of: pattern, options: .regularExpression) {
+                url = String(pasteboardString[range])
+                break
+            }
+        }
     }
 }
 
