@@ -384,10 +384,22 @@ struct EditUserSheet: View {
             Text("编辑用户")
                 .font(.headline)
 
-            Text(user.url)
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .lineLimit(1)
+            Button {
+                if let url = URL(string: user.url) {
+                    NSWorkspace.shared.open(url)
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(user.url)
+                        .font(.caption)
+                        .lineLimit(1)
+                    Image(systemName: "arrow.up.right.square")
+                        .font(.caption)
+                }
+                .foregroundColor(.blue)
+            }
+            .buttonStyle(.plain)
+            .help("点击打开链接")
 
             Form {
                 TextField("用户名称", text: $nickname)
