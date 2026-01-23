@@ -19,12 +19,15 @@ struct AnalysisView: View {
     @State private var frameCount: Int = 4
     @State private var concurrency: Int = 1
     @State private var requestDelay: Double = 2.0
+    @State private var rpm: Int = 0  // 每分钟请求数限制
     @State private var skipAnalyzed: Bool = true
+    @State private var selectedAuthor: String = ""  // 按作者筛选
 
     // 状态
     @State private var videosToAnalyze: [String] = []
     @State private var analysisResults: [VideoAnalysis] = []
     @State private var selectedTab: AnalysisTab = .config
+    @State private var availableAuthors: [String] = []  // 可选作者列表
 
     enum AnalysisTab {
         case config, results
@@ -152,10 +155,46 @@ struct AnalysisView: View {
                                 .foregroundColor(.secondary)
                         }
 
+                        HStack {
+                            Text("RPM 限制")
+                            Spacer()
+                            TextField("", value: $rpm, format: .number)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 60)
+                            Text("次/分")
+                                .foregroundColor(.secondary)
+                        }
+
+                        Text("RPM=0 表示不限制，优先使用 RPM，会自动计算请求间隔")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
                         Toggle("跳过已分析视频", isOn: $skipAnalyzed)
                             .onChange(of: skipAnalyzed) { _, _ in
                                 scanVideos()
                             }
+                    }
+                    .padding(.vertical, 4)
+                }
+
+                // 作者筛选
+                GroupBox("作者筛选") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Picker("选择作者", selection: $selectedAuthor) {
+                            Text("全部作者").tag("")
+                            ForEach(availableAuthors, id: \.self) { author in
+                                Text(author).tag(author)
+                            }
+                        }
+                        .onChange(of: selectedAuthor) { _, _ in
+                            scanVideos()
+                        }
+
+                        if !selectedAuthor.isEmpty {
+                            Text("仅分析 \(selectedAuthor) 的视频")
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                        }
                     }
                     .padding(.vertical, 4)
                 }
@@ -330,10 +369,12 @@ struct AnalysisView: View {
 
         guard FileManager.default.fileExists(atPath: downloadDir.path) else {
             videosToAnalyze = []
+            availableAuthors = []
             return
         }
 
         var videos: [String] = []
+        var authors = Set<String>()
         let extensions = ["mp4", "mov", "webm", "m4v"]
 
         if let enumerator = FileManager.default.enumerator(
@@ -343,10 +384,20 @@ struct AnalysisView: View {
         ) {
             for case let fileURL as URL in enumerator {
                 if extensions.contains(fileURL.pathExtension.lowercased()) {
-                    videos.append(fileURL.path)
+                    // 提取作者名（视频所在文件夹名）
+                    let authorName = fileURL.deletingLastPathComponent().lastPathComponent
+                    authors.insert(authorName)
+
+                    // 如果选择了作者，只添加该作者的视频
+                    if selectedAuthor.isEmpty || authorName == selectedAuthor {
+                        videos.append(fileURL.path)
+                    }
                 }
             }
         }
+
+        // 更新可选作者列表
+        availableAuthors = Array(authors).sorted()
 
         // 过滤已分析的
         if skipAnalyzed {
@@ -361,6 +412,12 @@ struct AnalysisView: View {
     }
 
     private func startAnalysis() {
+        // 如果设置了 RPM，自动计算请求间隔
+        var effectiveDelay = requestDelay
+        if rpm > 0 {
+            effectiveDelay = 60.0 / Double(rpm)
+        }
+
         let config = AnalysisConfig(
             provider: provider,
             apiKey: apiKey,
@@ -368,7 +425,8 @@ struct AnalysisView: View {
             model: model,
             frameCount: frameCount,
             concurrency: concurrency,
-            requestDelay: requestDelay,
+            requestDelay: effectiveDelay,
+            rpm: rpm,
             skipAnalyzed: skipAnalyzed
         )
 

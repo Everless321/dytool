@@ -23,10 +23,12 @@ struct DouyinUser: Identifiable, Codable, Equatable {
     var maxCounts: Int
     var interval: String?
     var nickname: String?
+    var awemeCount: Int?  // 作品总数
 
     enum CodingKeys: String, CodingKey {
         case id, url, mode, interval, nickname
         case maxCounts = "max_counts"
+        case awemeCount = "aweme_count"
     }
 
     var displayName: String {

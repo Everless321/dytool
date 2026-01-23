@@ -23,10 +23,12 @@ struct VideoGalleryView: View {
     @State private var viewingImageSet: LocalVideo?
 
     // 分页加载
-    @State private var allVideoPaths: [URL] = []  // 所有视频/图集路径
+    @State private var allVideoPaths: [URL] = []  // 符合过滤条件的视频/图集路径
     @State private var loadedCount: Int = 0
     @State private var isLoadingMore = false
-    private let pageSize = 30  // 每页加载数量
+    @State private var loadedPathSet: Set<String> = []  // 已加载路径集合，防止重复
+    @State private var isFiltering = false  // 过滤加载状态
+    private let pageSize = 50  // 每页加载数量
 
     // 分析数据
     @State private var analysisMap: [String: VideoAnalysis] = [:]
@@ -43,12 +45,13 @@ struct VideoGalleryView: View {
     // 所有可选标签
     @State private var availableTags: [String] = []
     @State private var availableCategories: [String] = []
+    @State private var tagSearchText: String = ""  // 标签搜索
 
     enum ViewMode {
         case grid, list
     }
 
-    // 是否有活跃的过滤条件
+    // 是否有活跃的过滤条件（用于UI显示）
     private var hasActiveFilters: Bool {
         (selectedAuthor != nil && !selectedAuthor!.isEmpty) ||
         onlyAnalyzed ||
@@ -58,48 +61,12 @@ struct VideoGalleryView: View {
         (selectedCategory != nil && !selectedCategory!.isEmpty)
     }
 
-    // 过滤后的视频
-    private var filteredVideos: [LocalVideo] {
-        videos.filter { video in
-            // 作者过滤
-            if let author = selectedAuthor, !author.isEmpty {
-                if video.folder != author {
-                    return false
-                }
-            }
-
-            // 只显示已分析的
-            if onlyAnalyzed && video.analysis == nil {
-                return false
-            }
-
-            // 擦边等级过滤
-            if let analysis = video.analysis {
-                if analysis.sexyLevel < minSexyLevel || analysis.sexyLevel > maxSexyLevel {
-                    return false
-                }
-
-                // 标签过滤
-                if !selectedTags.isEmpty {
-                    let videoTags = Set(analysis.tags)
-                    if videoTags.isDisjoint(with: selectedTags) {
-                        return false
-                    }
-                }
-
-                // 分类过滤
-                if let category = selectedCategory, !category.isEmpty {
-                    if analysis.category != category {
-                        return false
-                    }
-                }
-            } else if minSexyLevel > 0 || !selectedTags.isEmpty || selectedCategory != nil {
-                // 有过滤条件但没有分析数据，不显示
-                return false
-            }
-
-            return true
+    // 搜索过滤后的标签
+    private var filteredTags: [String] {
+        if tagSearchText.isEmpty {
+            return availableTags
         }
+        return availableTags.filter { $0.localizedCaseInsensitiveContains(tagSearchText) }
     }
 
     private let columns = [
@@ -164,9 +131,15 @@ struct VideoGalleryView: View {
 
                     Spacer()
 
-                    Text("\(filteredVideos.count) / \(allVideoPaths.count) 个")
+                    Text("\(videos.count) / \(allVideoPaths.count) 个")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
+
+                    // 过滤加载中
+                    if isFiltering {
+                        ProgressView()
+                            .scaleEffect(0.6)
+                    }
 
                     // 过滤器按钮
                     Button {
@@ -205,15 +178,24 @@ struct VideoGalleryView: View {
                     Spacer()
                     ProgressView("加载中...")
                     Spacer()
-                } else if filteredVideos.isEmpty {
+                } else if isFiltering {
+                    Spacer()
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text("正在筛选...")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                } else if videos.isEmpty {
                     Spacer()
                     VStack(spacing: 12) {
                         Image(systemName: "video.slash")
                             .font(.system(size: 48))
                             .foregroundColor(.secondary)
-                        Text(videos.isEmpty ? "暂无视频" : "无匹配视频")
+                        Text(hasActiveFilters ? "无匹配视频" : "暂无视频")
                             .font(.headline)
-                        Text(videos.isEmpty ? "下载视频后会在这里显示" : "调整过滤条件查看更多视频")
+                        Text(hasActiveFilters ? "调整过滤条件查看更多视频" : "下载视频后会在这里显示")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     }
@@ -223,7 +205,7 @@ struct VideoGalleryView: View {
                         switch viewMode {
                         case .grid:
                             LazyVGrid(columns: columns, spacing: 12) {
-                                ForEach(Array(filteredVideos.enumerated()), id: \.element.id) { index, video in
+                                ForEach(Array(videos.enumerated()), id: \.element.id) { index, video in
                                     LocalVideoGridItem(video: video, onPlay: {
                                         if video.isImageSet {
                                             viewingImageSet = video
@@ -243,7 +225,7 @@ struct VideoGalleryView: View {
                                     })
                                     .onAppear {
                                         // 当显示最后几个元素时触发加载更多
-                                        if index >= filteredVideos.count - 6 {
+                                        if index >= videos.count - 6 {
                                             loadMoreVideos()
                                         }
                                     }
@@ -257,7 +239,7 @@ struct VideoGalleryView: View {
                             .padding()
                         case .list:
                             LazyVStack(spacing: 8) {
-                                ForEach(Array(filteredVideos.enumerated()), id: \.element.id) { index, video in
+                                ForEach(Array(videos.enumerated()), id: \.element.id) { index, video in
                                     LocalVideoListItem(video: video, onPlay: {
                                         if video.isImageSet {
                                             viewingImageSet = video
@@ -275,7 +257,7 @@ struct VideoGalleryView: View {
                                     })
                                     .onAppear {
                                         // 当显示最后几个元素时触发加载更多
-                                        if index >= filteredVideos.count - 6 {
+                                        if index >= videos.count - 6 {
                                             loadMoreVideos()
                                         }
                                     }
@@ -332,32 +314,25 @@ struct VideoGalleryView: View {
             loadAnalysisData()
         }
         .onChange(of: selectedFolder) { _, _ in
-            loadVideos()
+            applyFilters()
         }
-        .onChange(of: selectedAuthor) { _, newValue in
-            if newValue != nil && !newValue!.isEmpty && hasMoreVideos {
-                loadAllVideosForFiltering()
-            }
+        .onChange(of: selectedAuthor) { _, _ in
+            applyFilters()
         }
-        .onChange(of: selectedTags) { _, newValue in
-            if !newValue.isEmpty && hasMoreVideos {
-                loadAllVideosForFiltering()
-            }
+        .onChange(of: selectedTags) { _, _ in
+            applyFilters()
         }
-        .onChange(of: selectedCategory) { _, newValue in
-            if newValue != nil && !newValue!.isEmpty && hasMoreVideos {
-                loadAllVideosForFiltering()
-            }
+        .onChange(of: selectedCategory) { _, _ in
+            applyFilters()
         }
-        .onChange(of: minSexyLevel) { _, newValue in
-            if newValue > 0 && hasMoreVideos {
-                loadAllVideosForFiltering()
-            }
+        .onChange(of: minSexyLevel) { _, _ in
+            applyFilters()
         }
-        .onChange(of: onlyAnalyzed) { _, newValue in
-            if newValue && hasMoreVideos {
-                loadAllVideosForFiltering()
-            }
+        .onChange(of: maxSexyLevel) { _, _ in
+            applyFilters()
+        }
+        .onChange(of: onlyAnalyzed) { _, _ in
+            applyFilters()
         }
     }
 
@@ -468,29 +443,54 @@ struct VideoGalleryView: View {
                     selectedCategory = nil
                     selectedAuthor = nil
                     onlyAnalyzed = false
+                    tagSearchText = ""
                 }
             }
 
             // 标签选择
             if !availableTags.isEmpty {
-                ScrollView {
-                    FlowLayout(spacing: 6) {
-                        ForEach(availableTags, id: \.self) { tag in
-                            TagFilterChip(
-                                tag: tag,
-                                isSelected: selectedTags.contains(tag),
-                                onToggle: {
-                                    if selectedTags.contains(tag) {
-                                        selectedTags.remove(tag)
-                                    } else {
-                                        selectedTags.insert(tag)
-                                    }
-                                }
-                            )
+                VStack(alignment: .leading, spacing: 6) {
+                    // 标签搜索框
+                    HStack {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundColor(.secondary)
+                        TextField("搜索标签...", text: $tagSearchText)
+                            .textFieldStyle(.plain)
+                        if !tagSearchText.isEmpty {
+                            Button {
+                                tagSearchText = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.secondary)
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
+                    .padding(6)
+                    .background(Color(NSColor.textBackgroundColor))
+                    .cornerRadius(6)
+                    .frame(width: 200)
+
+                    // 标签列表
+                    ScrollView {
+                        FlowLayout(spacing: 6) {
+                            ForEach(filteredTags, id: \.self) { tag in
+                                TagFilterChip(
+                                    tag: tag,
+                                    isSelected: selectedTags.contains(tag),
+                                    onToggle: {
+                                        if selectedTags.contains(tag) {
+                                            selectedTags.remove(tag)
+                                        } else {
+                                            selectedTags.insert(tag)
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 120)
                 }
-                .frame(maxHeight: 120)
             }
         }
         .padding(.horizontal)
@@ -594,42 +594,72 @@ struct VideoGalleryView: View {
         return count
     }
 
+    // 应用过滤器 - 重新扫描文件
+    private func applyFilters() {
+        loadVideos()
+    }
+
     private func loadVideos() {
-        isLoading = true
+        isLoading = videos.isEmpty
+        isFiltering = !videos.isEmpty
         videos = []
         allVideoPaths = []
         loadedCount = 0
+        loadedPathSet.removeAll()
+
+        // 获取符合分析条件的 awemeId 集合
+        let matchingAwemeIds = getMatchingAwemeIds()
 
         DispatchQueue.global(qos: .userInitiated).async {
             let path = databaseService.settings.path
             let downloadDir = URL(fileURLWithPath: path)
 
-            let searchDir: URL
-            if let folderName = selectedFolder,
-               let folder = folders.first(where: { $0.name == folderName }) {
-                searchDir = URL(fileURLWithPath: folder.path)
-            } else {
-                searchDir = downloadDir
-            }
+            // 确定搜索目录
+            var searchDirs: [URL] = []
 
-            guard FileManager.default.fileExists(atPath: searchDir.path) else {
-                DispatchQueue.main.async {
-                    self.isLoading = false
+            if let author = selectedAuthor, !author.isEmpty {
+                // 作者过滤：只扫描该作者的文件夹
+                if let folder = folders.first(where: { $0.name == author }) {
+                    searchDirs = [URL(fileURLWithPath: folder.path)]
                 }
-                return
+            } else if let folderName = selectedFolder,
+                      let folder = folders.first(where: { $0.name == folderName }) {
+                // 文件夹选择
+                searchDirs = [URL(fileURLWithPath: folder.path)]
+            } else {
+                // 全部：扫描所有作者文件夹
+                searchDirs = folders.map { URL(fileURLWithPath: $0.path) }
             }
 
-            // 先收集所有文件路径
+            // 如果没有文件夹，扫描整个下载目录
+            if searchDirs.isEmpty {
+                searchDirs = [downloadDir]
+            }
+
+            // 收集符合条件的文件路径
             var paths: [(url: URL, date: Date)] = []
-            if let enumerator = FileManager.default.enumerator(
-                at: searchDir,
-                includingPropertiesForKeys: [.creationDateKey],
-                options: [.skipsHiddenFiles]
-            ) {
-                for case let fileURL as URL in enumerator {
-                    if isVideoFile(fileURL) || isImageSetCover(fileURL) {
-                        let date = (try? fileURL.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? Date.distantPast
-                        paths.append((fileURL, date))
+
+            for searchDir in searchDirs {
+                guard FileManager.default.fileExists(atPath: searchDir.path) else { continue }
+
+                if let enumerator = FileManager.default.enumerator(
+                    at: searchDir,
+                    includingPropertiesForKeys: [.creationDateKey],
+                    options: [.skipsHiddenFiles]
+                ) {
+                    for case let fileURL as URL in enumerator {
+                        if isVideoFile(fileURL) || isImageSetCover(fileURL) {
+                            // 如果有分析条件过滤，检查 awemeId 是否匹配
+                            if let matchingIds = matchingAwemeIds {
+                                let awemeId = fileURL.deletingPathExtension().lastPathComponent
+                                if !matchingIds.contains(awemeId) {
+                                    continue
+                                }
+                            }
+
+                            let date = (try? fileURL.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? Date.distantPast
+                            paths.append((fileURL, date))
+                        }
                     }
                 }
             }
@@ -641,12 +671,54 @@ struct VideoGalleryView: View {
             DispatchQueue.main.async {
                 self.allVideoPaths = sortedPaths
                 self.isLoading = false
-                // 更新可用的过滤选项（只显示存在的视频的标签）
+                self.isFiltering = false
+                // 更新可用的过滤选项
                 self.updateAvailableFilters()
                 // 加载第一页
                 self.loadMoreVideos()
             }
         }
+    }
+
+    // 根据分析条件获取匹配的 awemeId 集合
+    private func getMatchingAwemeIds() -> Set<String>? {
+        let hasAnalysisFilters = onlyAnalyzed ||
+            minSexyLevel > 0 ||
+            maxSexyLevel < 10 ||
+            !selectedTags.isEmpty ||
+            (selectedCategory != nil && !selectedCategory!.isEmpty)
+
+        guard hasAnalysisFilters else { return nil }
+
+        var matchingIds = Set<String>()
+
+        for (awemeId, analysis) in analysisMap {
+            // 擦边等级过滤
+            if analysis.sexyLevel < minSexyLevel || analysis.sexyLevel > maxSexyLevel {
+                continue
+            }
+
+            // 标签过滤
+            if !selectedTags.isEmpty {
+                let videoTags = Set(analysis.tags)
+                if videoTags.isDisjoint(with: selectedTags) {
+                    continue
+                }
+            }
+
+            // 分类过滤
+            if let category = selectedCategory, !category.isEmpty {
+                if analysis.category != category {
+                    continue
+                }
+            }
+
+            matchingIds.insert(awemeId)
+        }
+
+        // 如果只显示已分析的，直接返回匹配的 ID
+        // 如果不是，但有其他分析条件，也返回匹配的 ID
+        return matchingIds
     }
 
     private func loadMoreVideos() {
@@ -676,7 +748,12 @@ struct VideoGalleryView: View {
             }
 
             DispatchQueue.main.async {
-                self.videos.append(contentsOf: newVideos)
+                // 过滤掉已加载的视频
+                let uniqueVideos = newVideos.filter { !self.loadedPathSet.contains($0.path) }
+                for video in uniqueVideos {
+                    self.loadedPathSet.insert(video.path)
+                }
+                self.videos.append(contentsOf: uniqueVideos)
                 self.loadedCount = endIndex
                 self.isLoadingMore = false
             }
@@ -685,39 +762,6 @@ struct VideoGalleryView: View {
 
     private var hasMoreVideos: Bool {
         loadedCount < allVideoPaths.count
-    }
-
-    // 当有过滤条件时，加载所有剩余视频
-    private func loadAllVideosForFiltering() {
-        guard hasMoreVideos else { return }
-
-        isLoadingMore = true
-        let startIndex = loadedCount
-        let pathsToLoad = Array(allVideoPaths[startIndex...])
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            let basePath = databaseService.settings.path
-            var newVideos: [LocalVideo] = []
-
-            for fileURL in pathsToLoad {
-                if isVideoFile(fileURL) {
-                    var video = createLocalVideo(from: fileURL, basePath: basePath)
-                    video.analysis = self.analysisMap[video.awemeId]
-                    newVideos.append(video)
-                } else if isImageSetCover(fileURL) {
-                    if var imageSet = createLocalImageSet(from: fileURL, basePath: basePath) {
-                        imageSet.analysis = self.analysisMap[imageSet.awemeId]
-                        newVideos.append(imageSet)
-                    }
-                }
-            }
-
-            DispatchQueue.main.async {
-                self.videos.append(contentsOf: newVideos)
-                self.loadedCount = self.allVideoPaths.count
-                self.isLoadingMore = false
-            }
-        }
     }
 
     private func isVideoFile(_ url: URL) -> Bool {

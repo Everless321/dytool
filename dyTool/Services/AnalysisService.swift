@@ -28,89 +28,76 @@ class AnalysisService: ObservableObject {
 你是专业的视频内容分析助手。分析视频帧截图，输出标准化JSON。
 
 ## 标签规则（严格遵守）：
-1. 只输出标签词本身，禁止带前缀（错误：「丝袜类: 黑丝」正确：「黑丝」）
-2. 必须使用纯中文，禁止中英混用（错误：「热 pants」正确：「热裤」）
-3. 标签内禁止有空格
-4. 从下方标签库中选择，可组合多个
 
-## 标签库：
+1. **原子化优先**：必须先输出基础标签，再输出组合标签
+   - 正确：["灰丝", "堆堆袜", "灰丝堆堆袜"]
+   - 错误：["灰丝堆堆袜"]（缺少基础标签）
 
-【袜子/丝袜】颜色+厚度+长度+风格 组合
-- 颜色：黑丝、白丝、肉丝、灰丝、彩丝、渐变丝
-- 厚度：超薄、薄款、中厚、厚款、加绒
-- 长度：短袜、中筒袜、过膝袜、大腿袜、连裤袜、九分袜
-- 款式：堆堆袜、网袜、渔网袜、蕾丝袜、提花袜、条纹袜、波点袜
-- 特征：脚尖透明、加档、T档、无缝
+2. **拆分规则**：
+   - 颜色+款式 → 分别输出：["黑丝", "过膝袜"] 而非只输出 ["黑丝过膝袜"]
+   - 厚度+长度 → 分别输出：["薄款", "连裤袜"]
+   - 风格+服装 → 分别输出：["JK制服", "百褶裙", "黑丝"]
 
-【腿部特征】
-- 腿型：长腿、美腿、细腿、直腿、腿部线条
-- 动作：抬腿、交叉腿、盘腿、侧躺、跪姿
+3. 只输出标签词本身，禁止带前缀（错误：「丝袜类: 黑丝」正确：「黑丝」）
+4. 必须使用纯中文，禁止中英混用
+5. 标签内禁止有空格
 
-【足部特征】
-- 状态：裸足、半裸足、脚尖
-- 细节：脚踝、足弓、脚背、脚趾
-- 动作：踮脚、勾脚、足部特写
+## 标签库（从中选择，可组合）：
 
-【鞋子】
-- 类型：高跟鞋、细跟鞋、粗跟鞋、平底鞋、凉鞋、拖鞋、靴子、短靴、长靴、运动鞋、帆布鞋、玛丽珍鞋、乐福鞋
-- 特征：尖头、圆头、鱼嘴、露趾、绑带
+【袜子/丝袜 - 必须拆分输出】
+- 颜色（单独输出）：黑丝、白丝、肉丝、灰丝、彩丝
+- 厚度（单独输出）：超薄、薄款、中厚、厚款
+- 长度（单独输出）：短袜、中筒袜、过膝袜、大腿袜、连裤袜、九分袜
+- 款式（单独输出）：堆堆袜、网袜、渔网袜、蕾丝袜、条纹袜
+- 特征（单独输出）：脚尖透明、T档、无缝
 
-【下装】
-- 裙子：短裙、超短裙、迷你裙、百褶裙、包臀裙、A字裙、长裙、开叉裙
-- 裤子：热裤、牛仔裤、紧身裤、阔腿裤、打底裤、短裤、皮裤、休闲裤
+【腿部特征】长腿、美腿、细腿、腿部线条、抬腿、交叉腿、盘腿、侧躺、跪姿
 
-【上装】
-- 款式：吊带、抹胸、露脐装、衬衫、T恤、背心、外套、毛衣、卫衣、针织衫
-- 领口：V领、深V、一字肩、露肩、低胸
+【足部特征】裸足、半裸足、脚尖、脚踝、足弓、脚背、踮脚、勾脚、足部特写
 
-【整体服装】
-JK制服、水手服、旗袍、连衣裙、汉服、洛丽塔、女仆装、护士装、兔女郎、猫娘装、泳装、比基尼、睡衣、居家服
+【鞋子】高跟鞋、细跟鞋、粗跟鞋、平底鞋、凉鞋、拖鞋、靴子、短靴、长靴、运动鞋、玛丽珍鞋、尖头、露趾
 
-【风格】
-甜美风、性感风、清纯风、御姐风、萝莉风、可爱风、冷艳风、日系、韩系
+【下装】短裙、超短裙、迷你裙、百褶裙、包臀裙、A字裙、长裙、开叉裙、热裤、牛仔裤、紧身裤、打底裤、短裤
 
-【内容类型】
-舞蹈、宅舞、韩舞、热舞、穿搭展示、试穿、换装、Cosplay、写真、自拍、日常
+【上装】吊带、抹胸、露脐装、衬衫、T恤、背心、毛衣、V领、深V、一字肩、露肩、低胸
 
-## 擦边等级评判标准（sexy_level 1-10）：
+【整体服装】JK制服、水手服、旗袍、连衣裙、汉服、洛丽塔、女仆装、护士装、兔女郎、泳装、比基尼、睡衣、居家服
 
-综合以下维度评分：
+【风格】甜美风、性感风、清纯风、御姐风、萝莉风、日系、韩系
+
+【内容类型】舞蹈、宅舞、韩舞、热舞、穿搭展示、试穿、换装、Cosplay、写真、自拍、日常
+
+## 擦边等级评判（sexy_level 1-10）：
 
 **A. 穿搭暴露度（基础分）**
-- 1-2分：正常日常穿搭，无暴露
+- 1-2分：正常日常穿搭
 - 3-4分：轻微暴露（短裙、吊带、露脐）
 - 5-6分：中度暴露（超短裙、深V、热裤）
 - 7-8分：较多暴露（比基尼、抹胸、大面积露肤）
-- 9-10分：极度暴露（近乎裸露、仅遮挡关键部位）
+- 9-10分：极度暴露
 
-**B. 特定穿搭加分（重要）**
+**B. 特定穿搭加分**
 - 肉丝/裸足/堆堆袜：+2~3分
-- 黑丝/白丝+高跟鞋：+1~2分
-- 超薄丝袜/脚尖透明：+1~2分
+- 黑丝+高跟鞋：+1~2分
+- 超薄/脚尖透明：+1~2分
 - 网袜/渔网袜：+1分
-- 足部特写/脚趾可见：+1~2分
+- 足部特写：+1~2分
 
-**C. 身体/镜头暴露度**
-- 加分项：特写镜头对准胸部/臀部/腿部、低角度拍摄、身体曲线明显
-- 加分项：大腿根部、臀部轮廓、胸部轮廓清晰可见
-
-**D. 表情/神态**
-- 加分项：媚眼、咬唇、舔唇、挑逗表情、娇喘姿态
-- 加分项：眼神勾人、嘟嘴卖萌带暗示
-
-**E. 动作/姿势诱惑度**
-- 加分项：撩衣、弯腰、翘臀、M字腿、趴姿露沟
-- 加分项：抚摸身体、挑逗性舞蹈动作、踮脚展示腿部
-
-**评分原则**：基础分从穿搭暴露度开始，叠加B/C/D/E维度加分，上限10分。
-注意：肉丝堆堆袜+裸足组合应至少6-7分起步。
+**C. 镜头/动作加分**
+- 特写对准敏感部位、低角度拍摄
+- 撩衣、弯腰、翘臀、M字腿
+- 媚眼、咬唇、挑逗表情
 
 ## 输出字段：
-- tags: 标签数组（5-15个，必须纯中文无空格）
+- tags: 标签数组（8-20个，必须包含所有识别到的基础标签）
 - category: 主分类（舞蹈/穿搭展示/Cosplay/写真/日常/教程）
 - summary: 一句话描述（15字内）
 - scene: 场景（卧室/客厅/户外/舞房/其他）
-- sexy_level: 擦边等级1-10（综合上述四维度评分）
+- sexy_level: 擦边等级1-10
+
+## 输出示例：
+视频内容：穿灰色堆堆袜的女生在跳舞
+正确输出：{"tags":["灰丝","堆堆袜","舞蹈","长腿","短裙"],"category":"舞蹈","summary":"灰丝堆堆袜热舞","scene":"舞房","sexy_level":5}
 
 ## 输出格式（严格JSON，无其他文字）：
 {"tags":["标签1","标签2"],"category":"分类","summary":"描述","scene":"场景","sexy_level":5}
@@ -177,6 +164,7 @@ JK制服、水手服、旗袍、连衣裙、汉服、洛丽塔、女仆装、护
         let model = customModel.isEmpty ? "gemini-2.0-flash" : customModel
         let baseUrl = endpoint.isEmpty ? "https://generativelanguage.googleapis.com" : endpoint.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let url = URL(string: "\(baseUrl)/v1beta/models/\(model):generateContent?key=\(apiKey)")!
+        let isHTTP = url.scheme == "http"
 
         // 构建请求体
         var parts: [[String: Any]] = [["text": analysisPrompt]]
@@ -201,10 +189,17 @@ JK制服、水手服、旗袍、连衣裙、汉服、洛丽塔、女仆装、护
             ]
         ]
 
+        let bodyData = try JSONSerialization.data(withJSONObject: payload)
+
+        // HTTP 请求使用 curl
+        if isHTTP {
+            return try await callGeminiWithCurl(url: url, body: bodyData)
+        }
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        request.httpBody = bodyData
         request.timeoutInterval = 60
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -230,6 +225,61 @@ JK制服、水手服、旗袍、连衣裙、汉服、洛丽塔、女仆装、护
         return text
     }
 
+    // Gemini HTTP curl 调用
+    private func callGeminiWithCurl(url: URL, body: Data) async throws -> String {
+        let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        try body.write(to: tempFile)
+
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                defer { try? FileManager.default.removeItem(at: tempFile) }
+
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+                process.arguments = [
+                    "-s", "-X", "POST", url.absoluteString,
+                    "-H", "Content-Type: application/json",
+                    "-d", "@\(tempFile.path)",
+                    "--max-time", "120"
+                ]
+
+                let pipe = Pipe()
+                process.standardOutput = pipe
+                process.standardError = pipe
+
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+
+                    let outputData = pipe.fileHandleForReading.readDataToEndOfFile()
+
+                    // 检查错误
+                    if let json = try? JSONSerialization.jsonObject(with: outputData) as? [String: Any],
+                       let error = json["error"] as? [String: Any],
+                       let message = error["message"] as? String {
+                        continuation.resume(throwing: AnalysisError.apiError(0, message))
+                        return
+                    }
+
+                    // 解析成功响应
+                    guard let json = try? JSONSerialization.jsonObject(with: outputData) as? [String: Any],
+                          let candidates = json["candidates"] as? [[String: Any]],
+                          let content = candidates.first?["content"] as? [String: Any],
+                          let responseParts = content["parts"] as? [[String: Any]],
+                          let text = responseParts.first?["text"] as? String else {
+                        let output = String(data: outputData, encoding: .utf8) ?? ""
+                        continuation.resume(throwing: AnalysisError.parseError("无法解析响应: \(output.prefix(200))"))
+                        return
+                    }
+
+                    continuation.resume(returning: text)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
     // MARK: - 调用 Grok API
 
     private func callGrokAPI(apiKey: String, endpoint: String, model customModel: String, imagePaths: [URL]) async throws -> String {
@@ -237,11 +287,6 @@ JK制服、水手服、旗袍、连衣裙、汉服、洛丽塔、女仆装、护
         let baseUrl = endpoint.isEmpty ? "https://api.x.ai" : endpoint.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let url = URL(string: "\(baseUrl)/v1/chat/completions")!
         let isHTTP = url.scheme == "http"
-
-        // 调试日志
-        addLog("[调试] URL: \(url), HTTP: \(isHTTP)")
-        addLog("[调试] 模型: \(model)")
-        addLog("[调试] API Key 长度: \(apiKey.count), 前缀: \(String(apiKey.prefix(5)))")
 
         // 构建消息内容
         var content: [[String: Any]] = [["type": "text", "text": analysisPrompt]]
@@ -304,46 +349,58 @@ JK制服、水手服、旗袍、连衣裙、汉服、洛丽塔、女仆装、护
         // 写入临时文件
         let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
         try body.write(to: tempFile)
-        defer { try? FileManager.default.removeItem(at: tempFile) }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
-        process.arguments = [
-            "-s", "-X", "POST", url.absoluteString,
-            "-H", "Content-Type: application/json",
-            "-H", "Authorization: Bearer \(apiKey)",
-            "-d", "@\(tempFile.path)",
-            "--max-time", "120"
-        ]
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                defer { try? FileManager.default.removeItem(at: tempFile) }
 
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+                process.arguments = [
+                    "-s", "-X", "POST", url.absoluteString,
+                    "-H", "Content-Type: application/json",
+                    "-H", "Authorization: Bearer \(apiKey)",
+                    "-d", "@\(tempFile.path)",
+                    "--max-time", "120"
+                ]
 
-        try process.run()
-        process.waitUntilExit()
+                let pipe = Pipe()
+                process.standardOutput = pipe
+                process.standardError = pipe
 
-        let outputData = pipe.fileHandleForReading.readDataToEndOfFile()
-        guard let output = String(data: outputData, encoding: .utf8) else {
-            throw AnalysisError.networkError("curl 无输出")
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+
+                    let outputData = pipe.fileHandleForReading.readDataToEndOfFile()
+                    guard let output = String(data: outputData, encoding: .utf8) else {
+                        continuation.resume(throwing: AnalysisError.networkError("curl 无输出"))
+                        return
+                    }
+
+                    // 检查是否是错误响应
+                    if let json = try? JSONSerialization.jsonObject(with: outputData) as? [String: Any],
+                       let error = json["error"] as? [String: Any],
+                       let message = error["message"] as? String {
+                        continuation.resume(throwing: AnalysisError.apiError(0, message))
+                        return
+                    }
+
+                    // 解析成功响应
+                    guard let json = try? JSONSerialization.jsonObject(with: outputData) as? [String: Any],
+                          let choices = json["choices"] as? [[String: Any]],
+                          let message = choices.first?["message"] as? [String: Any],
+                          let text = message["content"] as? String else {
+                        continuation.resume(throwing: AnalysisError.parseError("无法解析响应: \(output.prefix(200))"))
+                        return
+                    }
+
+                    continuation.resume(returning: text)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
         }
-
-        // 检查是否是错误响应
-        if let json = try? JSONSerialization.jsonObject(with: outputData) as? [String: Any],
-           let error = json["error"] as? [String: Any],
-           let message = error["message"] as? String {
-            throw AnalysisError.apiError(0, message)
-        }
-
-        // 解析成功响应
-        guard let json = try JSONSerialization.jsonObject(with: outputData) as? [String: Any],
-              let choices = json["choices"] as? [[String: Any]],
-              let message = choices.first?["message"] as? [String: Any],
-              let text = message["content"] as? String else {
-            throw AnalysisError.parseError("无法解析响应: \(output.prefix(200))")
-        }
-
-        return text
     }
 
     // MARK: - 解析分析结果
@@ -496,6 +553,11 @@ JK制服、水手服、旗袍、连衣裙、汉服、洛丽塔、女仆装、护
 
         addLog("[信息] 开始分析 \(total) 个视频")
         addLog("[信息] API: \(config.provider.displayName)")
+        if config.rpm > 0 {
+            addLog("[信息] RPM 限制: \(config.rpm) 次/分钟 (间隔 \(String(format: "%.1f", config.requestDelay))秒)")
+        } else {
+            addLog("[信息] 请求间隔: \(String(format: "%.1f", config.requestDelay))秒")
+        }
 
         if config.concurrency > 1 {
             addLog("[信息] 并发数: \(config.concurrency)")

@@ -62,6 +62,7 @@ struct AnalysisConfig {
     var frameCount: Int = 4
     var concurrency: Int = 1
     var requestDelay: Double = 2.0
+    var rpm: Int = 0           // 每分钟请求数限制，0 表示不限制
     var skipAnalyzed: Bool = true
 
     enum AIProvider: String, CaseIterable {

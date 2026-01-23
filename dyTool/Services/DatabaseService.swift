@@ -68,6 +68,7 @@ class DatabaseService: ObservableObject {
                 interval TEXT,
                 nickname TEXT,
                 path TEXT,
+                aweme_count INTEGER,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """
@@ -81,6 +82,9 @@ class DatabaseService: ObservableObject {
 
         executeSQL(createUsersTable)
         executeSQL(createSettingsTable)
+
+        // 迁移：添加 aweme_count 列（如果不存在）
+        executeSQL("ALTER TABLE users ADD COLUMN aweme_count INTEGER")
 
         // 初始化默认设置
         initDefaultSettings()
@@ -130,7 +134,7 @@ class DatabaseService: ObservableObject {
     func getAllUsers() -> [DouyinUser] {
         var result: [DouyinUser] = []
         // 过滤掉空记录
-        let sql = "SELECT id, url, mode, max_counts, interval, nickname FROM users WHERE length(id) > 0 AND length(url) > 0 ORDER BY created_at DESC"
+        let sql = "SELECT id, url, mode, max_counts, interval, nickname, aweme_count FROM users WHERE length(id) > 0 AND length(url) > 0 ORDER BY created_at DESC"
 
         var statement: OpaquePointer?
         if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
@@ -144,6 +148,7 @@ class DatabaseService: ObservableObject {
                 let maxCounts = Int(sqlite3_column_int(statement, 3))
                 let interval = sqlite3_column_text(statement, 4).map { String(cString: $0) }
                 let nickname = sqlite3_column_text(statement, 5).map { String(cString: $0) }
+                let awemeCount: Int? = sqlite3_column_type(statement, 6) != SQLITE_NULL ? Int(sqlite3_column_int(statement, 6)) : nil
 
                 let user = DouyinUser(
                     id: id,
@@ -151,7 +156,8 @@ class DatabaseService: ObservableObject {
                     mode: finalMode,
                     maxCounts: maxCounts,
                     interval: interval,
-                    nickname: nickname
+                    nickname: nickname,
+                    awemeCount: awemeCount
                 )
                 result.append(user)
             }
@@ -160,7 +166,7 @@ class DatabaseService: ObservableObject {
         return result
     }
 
-    func addUser(url: String, mode: String = "post", maxCounts: Int = 0, nickname: String? = nil) -> DouyinUser? {
+    func addUser(url: String, mode: String = "post", maxCounts: Int = 0, nickname: String? = nil, awemeCount: Int? = nil) -> DouyinUser? {
         // 验证 URL 不为空
         let trimmedUrl = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedUrl.isEmpty else {
@@ -169,7 +175,7 @@ class DatabaseService: ObservableObject {
         }
 
         let id = "user_\(UUID().uuidString.prefix(8))"
-        let sql = "INSERT INTO users (id, url, mode, max_counts, nickname) VALUES (?, ?, ?, ?, ?)"
+        let sql = "INSERT INTO users (id, url, mode, max_counts, nickname, aweme_count) VALUES (?, ?, ?, ?, ?, ?)"
 
         var statement: OpaquePointer?
         if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
@@ -182,10 +188,15 @@ class DatabaseService: ObservableObject {
             } else {
                 sqlite3_bind_null(statement, 5)
             }
+            if let awemeCount = awemeCount {
+                sqlite3_bind_int(statement, 6, Int32(awemeCount))
+            } else {
+                sqlite3_bind_null(statement, 6)
+            }
 
             if sqlite3_step(statement) == SQLITE_DONE {
                 sqlite3_finalize(statement)
-                let user = DouyinUser(id: id, url: trimmedUrl, mode: mode, maxCounts: maxCounts, nickname: nickname)
+                let user = DouyinUser(id: id, url: trimmedUrl, mode: mode, maxCounts: maxCounts, nickname: nickname, awemeCount: awemeCount)
                 DispatchQueue.main.async {
                     self.users.insert(user, at: 0)
                 }
@@ -201,7 +212,7 @@ class DatabaseService: ObservableObject {
     }
 
     func updateUser(_ user: DouyinUser) -> Bool {
-        let sql = "UPDATE users SET mode = ?, max_counts = ?, interval = ?, nickname = ? WHERE id = ?"
+        let sql = "UPDATE users SET mode = ?, max_counts = ?, interval = ?, nickname = ?, aweme_count = ? WHERE id = ?"
 
         var statement: OpaquePointer?
         if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
@@ -217,7 +228,12 @@ class DatabaseService: ObservableObject {
             } else {
                 sqlite3_bind_null(statement, 4)
             }
-            sqlite3_bind_text(statement, 5, user.id, -1, SQLITE_TRANSIENT)
+            if let awemeCount = user.awemeCount {
+                sqlite3_bind_int(statement, 5, Int32(awemeCount))
+            } else {
+                sqlite3_bind_null(statement, 5)
+            }
+            sqlite3_bind_text(statement, 6, user.id, -1, SQLITE_TRANSIENT)
 
             let result = sqlite3_step(statement) == SQLITE_DONE
             sqlite3_finalize(statement)
@@ -641,5 +657,45 @@ class DatabaseService: ObservableObject {
             sqlite3_step(statement)
         }
         sqlite3_finalize(statement)
+    }
+
+    // MARK: - 下载统计
+
+    /// 获取用户已下载的视频数量
+    func getDownloadedCount(for user: DouyinUser) -> Int {
+        let downloadPath = settings.path
+        let nickname = user.nickname ?? user.displayName
+
+        // 构建用户文件夹路径: {downloadPath}/douyin/{mode}/{nickname}/
+        let userFolder = URL(fileURLWithPath: downloadPath)
+            .appendingPathComponent("douyin")
+            .appendingPathComponent(user.mode)
+            .appendingPathComponent(nickname)
+
+        return countVideos(in: userFolder)
+    }
+
+    /// 获取所有用户的下载数量
+    func getAllDownloadedCounts() -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for user in users {
+            counts[user.id] = getDownloadedCount(for: user)
+        }
+        return counts
+    }
+
+    private func countVideos(in folder: URL) -> Int {
+        guard FileManager.default.fileExists(atPath: folder.path) else { return 0 }
+
+        do {
+            let contents = try FileManager.default.contentsOfDirectory(
+                at: folder,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+            return contents.filter { $0.pathExtension.lowercased() == "mp4" }.count
+        } catch {
+            return 0
+        }
     }
 }

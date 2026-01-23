@@ -19,6 +19,13 @@ struct UserListView: View {
     @State private var isEditMode = false
     @State private var selectedUsers: Set<String> = []
 
+    // 下载数量缓存
+    @State private var downloadCounts: [String: Int] = [:]
+
+    // 刷新用户信息状态
+    @State private var refreshingUsers: Set<String> = []
+    @State private var isRefreshingAll = false
+
     var body: some View {
         VStack(spacing: 0) {
             // 工具栏
@@ -53,6 +60,22 @@ struct UserListView: View {
                         Label("批量设置 (\(selectedUsers.count))", systemImage: "slider.horizontal.3")
                     }
                     .buttonStyle(.borderedProminent)
+                }
+
+                // 刷新所有用户信息
+                if !databaseService.users.isEmpty {
+                    Button {
+                        refreshAllUserInfo()
+                    } label: {
+                        if isRefreshingAll {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                    }
+                    .disabled(isRefreshingAll)
+                    .help("刷新所有用户信息")
                 }
 
                 Button {
@@ -119,7 +142,11 @@ struct UserListView: View {
                                     }
                             }
 
-                            UserRowView(user: user)
+                            UserRowView(
+                                user: user,
+                                downloadedCount: downloadCounts[user.id] ?? 0,
+                                isRefreshing: refreshingUsers.contains(user.id)
+                            )
                         }
                         .contentShape(Rectangle())
                         .onTapGesture {
@@ -132,6 +159,12 @@ struct UserListView: View {
                             }
                         }
                         .contextMenu {
+                            Button {
+                                refreshUserInfo(user)
+                            } label: {
+                                Label("刷新信息", systemImage: "arrow.clockwise")
+                            }
+
                             Button("编辑") {
                                 selectedUser = user
                                 showEditSheet = true
@@ -179,6 +212,103 @@ struct UserListView: View {
                     batchUpdateMaxCounts(maxCounts)
                 }
             )
+        }
+        .onAppear {
+            refreshDownloadCounts()
+        }
+        .onChange(of: databaseService.users) { _, _ in
+            refreshDownloadCounts()
+        }
+    }
+
+    private func refreshDownloadCounts() {
+        downloadCounts = databaseService.getAllDownloadedCounts()
+    }
+
+    private func refreshUserInfo(_ user: DouyinUser) {
+        guard !refreshingUsers.contains(user.id) else { return }
+
+        refreshingUsers.insert(user.id)
+        let cookie = databaseService.getCookie()
+
+        Task {
+            do {
+                let profile = try await BackendService.shared.parseUser(url: user.url, cookie: cookie)
+
+                await MainActor.run {
+                    var updated = user
+                    var hasChanges = false
+
+                    if let nickname = profile.nickname, !nickname.isEmpty, nickname != user.nickname {
+                        updated.nickname = nickname
+                        hasChanges = true
+                    }
+                    if let awemeCount = profile.awemeCount {
+                        updated.awemeCount = awemeCount
+                        hasChanges = true
+                    }
+
+                    if hasChanges {
+                        _ = databaseService.updateUser(updated)
+                    }
+                    refreshingUsers.remove(user.id)
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = "刷新失败: \(error.localizedDescription)"
+                    refreshingUsers.remove(user.id)
+                }
+            }
+        }
+    }
+
+    private func refreshAllUserInfo() {
+        guard !isRefreshingAll else { return }
+
+        isRefreshingAll = true
+        let cookie = databaseService.getCookie()
+        let users = databaseService.users
+
+        Task {
+            var updatedCount = 0
+
+            for user in users {
+                do {
+                    let profile = try await BackendService.shared.parseUser(url: user.url, cookie: cookie)
+
+                    await MainActor.run {
+                        var updated = user
+                        var hasChanges = false
+
+                        if let nickname = profile.nickname, !nickname.isEmpty, nickname != user.nickname {
+                            updated.nickname = nickname
+                            hasChanges = true
+                        }
+                        if let awemeCount = profile.awemeCount {
+                            updated.awemeCount = awemeCount
+                            hasChanges = true
+                        }
+
+                        if hasChanges {
+                            _ = databaseService.updateUser(updated)
+                            updatedCount += 1
+                        }
+                    }
+
+                    // 避免请求过快
+                    try await Task.sleep(nanoseconds: 500_000_000) // 0.5秒
+                } catch {
+                    // 单个用户失败不中断整体刷新
+                    continue
+                }
+            }
+
+            await MainActor.run {
+                isRefreshingAll = false
+                if updatedCount > 0 {
+                    errorMessage = nil
+                }
+            }
         }
     }
 
@@ -241,18 +371,27 @@ struct UserListView: View {
 
 struct UserRowView: View {
     let user: DouyinUser
+    let downloadedCount: Int
+    let isRefreshing: Bool
 
     var body: some View {
         HStack(spacing: 12) {
             // 头像占位
-            Circle()
-                .fill(Color.blue.opacity(0.2))
-                .frame(width: 40, height: 40)
-                .overlay {
-                    Text(String(user.displayName.prefix(1)))
-                        .font(.headline)
-                        .foregroundColor(.blue)
-                }
+            ZStack {
+                Circle()
+                    .fill(Color.blue.opacity(0.2))
+                    .frame(width: 40, height: 40)
+                    .overlay {
+                        if isRefreshing {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                        } else {
+                            Text(String(user.displayName.prefix(1)))
+                                .font(.headline)
+                                .foregroundColor(.blue)
+                        }
+                    }
+            }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(user.displayName)
@@ -268,6 +407,17 @@ struct UserRowView: View {
                         Text("最多 \(user.maxCounts) 个")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                    }
+
+                    // 显示下载进度：已下载/总数
+                    if let total = user.awemeCount, total > 0 {
+                        Text("\(downloadedCount)/\(total)")
+                            .font(.caption)
+                            .foregroundColor(downloadedCount >= total ? .green : .orange)
+                    } else if downloadedCount > 0 {
+                        Text("\(downloadedCount) 已下载")
+                            .font(.caption)
+                            .foregroundColor(.green)
                     }
                 }
             }
@@ -309,10 +459,16 @@ struct UserRowView: View {
 
 struct AddUserSheet: View {
     @Environment(\.dismiss) var dismiss
+    @EnvironmentObject var db: DatabaseService
     @State private var url = ""
     @State private var mode = "post"
     @State private var maxCounts = 0
     @State private var nickname = ""
+
+    // 用户信息获取状态
+    @State private var isFetching = false
+    @State private var fetchedProfile: ParsedUserProfile?
+    @State private var fetchError: String?
 
     let onAdd: (String, String, Int, String?) -> Void
 
@@ -322,8 +478,97 @@ struct AddUserSheet: View {
                 .font(.headline)
 
             Form {
-                TextField("抖音用户链接", text: $url)
-                    .textFieldStyle(.roundedBorder)
+                // URL 输入区域
+                HStack {
+                    TextField("抖音用户链接", text: $url)
+                        .textFieldStyle(.roundedBorder)
+                        .onChange(of: url) { _, newValue in
+                            // URL 变化时重置状态
+                            if fetchedProfile != nil && !newValue.isEmpty {
+                                fetchedProfile = nil
+                                fetchError = nil
+                            }
+                        }
+                        .onSubmit {
+                            fetchUserInfo()
+                        }
+
+                    if isFetching {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    } else if !url.isEmpty {
+                        Button {
+                            fetchUserInfo()
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("获取用户信息")
+                    }
+                }
+
+                // 用户信息预览
+                if let profile = fetchedProfile {
+                    HStack(spacing: 12) {
+                        // 头像
+                        if let avatarUrl = profile.avatar, let url = URL(string: avatarUrl) {
+                            AsyncImage(url: url) { image in
+                                image
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                            } placeholder: {
+                                Circle()
+                                    .fill(Color.blue.opacity(0.2))
+                            }
+                            .frame(width: 48, height: 48)
+                            .clipShape(Circle())
+                        } else {
+                            Circle()
+                                .fill(Color.blue.opacity(0.2))
+                                .frame(width: 48, height: 48)
+                                .overlay {
+                                    Text(String((profile.nickname ?? "U").prefix(1)))
+                                        .font(.headline)
+                                        .foregroundColor(.blue)
+                                }
+                        }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(profile.nickname ?? "未知用户")
+                                .font(.headline)
+
+                            HStack(spacing: 16) {
+                                if let count = profile.awemeCount {
+                                    Label("\(count) 作品", systemImage: "video")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                if let count = profile.followerCount {
+                                    Label("\(formatCount(count)) 粉丝", systemImage: "person.2")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+
+                        Spacer()
+
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                    }
+                    .padding(.vertical, 8)
+                }
+
+                // 错误提示
+                if let error = fetchError {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundColor(.orange)
+                        Text(error)
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
+                }
 
                 TextField("用户名称 (可选)", text: $nickname)
                     .textFieldStyle(.roundedBorder)
@@ -350,20 +595,73 @@ struct AddUserSheet: View {
                     onAdd(url, mode, maxCounts, nickname.isEmpty ? nil : nickname)
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(url.isEmpty)
+                .disabled(url.isEmpty || isFetching)
             }
         }
         .padding()
-        .frame(width: 400)
+        .frame(width: 450)
         .onAppear {
             extractDouyinUrlFromPasteboard()
         }
     }
 
+    private func fetchUserInfo() {
+        guard !url.isEmpty else { return }
+        guard isValidDouyinUrl(url) else {
+            fetchError = "请输入有效的抖音用户链接"
+            return
+        }
+
+        isFetching = true
+        fetchError = nil
+
+        let cookie = db.getCookie()
+
+        Task {
+            do {
+                let profile = try await BackendService.shared.parseUser(url: url, cookie: cookie)
+
+                await MainActor.run {
+                    fetchedProfile = profile
+
+                    // 检查是否有警告消息（如缺少 Cookie）
+                    if let warning = BackendService.shared.lastError {
+                        fetchError = warning
+                        BackendService.shared.lastError = nil
+                    }
+
+                    // 自动填充昵称
+                    if nickname.isEmpty, let name = profile.nickname {
+                        nickname = name
+                    }
+                    isFetching = false
+                }
+            } catch {
+                await MainActor.run {
+                    fetchError = error.localizedDescription
+                    isFetching = false
+                }
+            }
+        }
+    }
+
+    private func isValidDouyinUrl(_ url: String) -> Bool {
+        let patterns = [
+            #"https://v\.douyin\.com/[A-Za-z0-9]+/?"#,
+            #"https://www\.douyin\.com/user/[A-Za-z0-9_-]+"#
+        ]
+
+        for pattern in patterns {
+            if url.range(of: pattern, options: .regularExpression) != nil {
+                return true
+            }
+        }
+        return false
+    }
+
     private func extractDouyinUrlFromPasteboard() {
         guard let pasteboardString = NSPasteboard.general.string(forType: .string) else { return }
 
-        // 匹配抖音链接: https://v.douyin.com/xxx 或 https://www.douyin.com/user/xxx
         let patterns = [
             #"https://v\.douyin\.com/[A-Za-z0-9]+/?"#,
             #"https://www\.douyin\.com/user/[A-Za-z0-9_-]+"#
@@ -372,9 +670,20 @@ struct AddUserSheet: View {
         for pattern in patterns {
             if let range = pasteboardString.range(of: pattern, options: .regularExpression) {
                 url = String(pasteboardString[range])
+                // 自动获取用户信息
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    fetchUserInfo()
+                }
                 break
             }
         }
+    }
+
+    private func formatCount(_ count: Int) -> String {
+        if count >= 10000 {
+            return String(format: "%.1f万", Double(count) / 10000)
+        }
+        return "\(count)"
     }
 }
 
