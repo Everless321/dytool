@@ -138,7 +138,7 @@ struct VideoGalleryView: View {
                     // 过滤加载中
                     if isFiltering {
                         ProgressView()
-                            .scaleEffect(0.6)
+                            .controlSize(.small)
                     }
 
                     // 过滤器按钮
@@ -344,7 +344,7 @@ struct VideoGalleryView: View {
             Spacer()
             if isLoadingMore {
                 ProgressView()
-                    .scaleEffect(0.8)
+                    .controlSize(.small)
                 Text("加载中...")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -1535,7 +1535,7 @@ struct VideoThumbnailView: View {
         guard !isLoading else { return }
         isLoading = true
 
-        DispatchQueue.global(qos: .userInitiated).async {
+        Task {
             let url = URL(fileURLWithPath: videoPath)
             let asset = AVURLAsset(url: url)
             let generator = AVAssetImageGenerator(asset: asset)
@@ -1546,23 +1546,23 @@ struct VideoThumbnailView: View {
             let time = CMTime(seconds: 3, preferredTimescale: 600)
 
             do {
-                let cgImage = try generator.copyCGImage(at: time, actualTime: nil)
+                let (cgImage, _) = try await generator.image(at: time)
                 let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-                DispatchQueue.main.async {
+                await MainActor.run {
                     self.thumbnail = nsImage
                     self.isLoading = false
                 }
             } catch {
                 // 如果3秒失败，尝试0秒
                 do {
-                    let cgImage = try generator.copyCGImage(at: .zero, actualTime: nil)
+                    let (cgImage, _) = try await generator.image(at: .zero)
                     let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-                    DispatchQueue.main.async {
+                    await MainActor.run {
                         self.thumbnail = nsImage
                         self.isLoading = false
                     }
                 } catch {
-                    DispatchQueue.main.async {
+                    await MainActor.run {
                         self.isLoading = false
                     }
                 }

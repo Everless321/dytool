@@ -158,6 +158,207 @@ class AnalysisService: ObservableObject {
         return framePaths
     }
 
+    // MARK: - 图集处理
+
+    /// 从文件夹中识别图集作品，返回 [作品前缀: [图片路径]]
+    func groupImageSets(in folder: URL) -> [String: [String]] {
+        guard FileManager.default.fileExists(atPath: folder.path) else { return [:] }
+
+        do {
+            let contents = try FileManager.default.contentsOfDirectory(
+                at: folder,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+
+            var groups: [String: [String]] = [:]
+            let imageExtensions = ["webp", "jpg", "jpeg", "png"]
+
+            for file in contents {
+                let ext = file.pathExtension.lowercased()
+                guard imageExtensions.contains(ext) else { continue }
+
+                let filename = file.deletingPathExtension().lastPathComponent
+
+                // 跳过封面图
+                if filename.hasSuffix("_cover") { continue }
+
+                // 提取图集前缀：移除 _image_N 后缀
+                var prefix = filename
+                if let range = filename.range(of: "_image_\\d+$", options: .regularExpression) {
+                    prefix = String(filename[..<range.lowerBound])
+
+                    // 添加到分组
+                    if groups[prefix] == nil {
+                        groups[prefix] = []
+                    }
+                    groups[prefix]?.append(file.path)
+                }
+            }
+
+            // 按图片序号排序
+            for (prefix, paths) in groups {
+                groups[prefix] = paths.sorted { path1, path2 in
+                    let num1 = extractImageNumber(from: path1)
+                    let num2 = extractImageNumber(from: path2)
+                    return num1 < num2
+                }
+            }
+
+            return groups
+        } catch {
+            return [:]
+        }
+    }
+
+    private func extractImageNumber(from path: String) -> Int {
+        let filename = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+        if let range = filename.range(of: "_image_(\\d+)$", options: .regularExpression),
+           let numRange = filename.range(of: "\\d+$", options: .regularExpression, range: range) {
+            return Int(filename[numRange]) ?? 0
+        }
+        return 0
+    }
+
+    /// 均匀采样图片（最多 maxCount 张）
+    private func sampleImages(_ paths: [String], maxCount: Int = 10) -> [URL] {
+        guard !paths.isEmpty else { return [] }
+
+        if paths.count <= maxCount {
+            return paths.map { URL(fileURLWithPath: $0) }
+        }
+
+        // 均匀采样
+        var sampled: [URL] = []
+        let step = Double(paths.count - 1) / Double(maxCount - 1)
+
+        for i in 0..<maxCount {
+            let index = Int(round(Double(i) * step))
+            sampled.append(URL(fileURLWithPath: paths[index]))
+        }
+
+        return sampled
+    }
+
+    /// 扫描文件夹，识别所有需要分析的项目（视频+图集）
+    func scanAnalysisItems(in folder: URL, skipAnalyzed: Bool = true) -> [AnalysisItem] {
+        var items: [AnalysisItem] = []
+
+        // 1. 获取图集分组
+        let imageSets = groupImageSets(in: folder)
+
+        // 2. 获取已分析的 awemeId
+        let analyzedIds: Set<String>
+        if skipAnalyzed {
+            analyzedIds = Set(DatabaseService.shared.getAnalyzedAwemeIds())
+        } else {
+            analyzedIds = []
+        }
+
+        // 3. 收集图集前缀（用于排除视频）
+        let imageSetPrefixes = Set(imageSets.keys)
+
+        // 4. 扫描视频文件
+        do {
+            let contents = try FileManager.default.contentsOfDirectory(
+                at: folder,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+
+            for file in contents {
+                let ext = file.pathExtension.lowercased()
+                guard ext == "mp4" else { continue }
+
+                let filename = file.deletingPathExtension().lastPathComponent
+
+                // 跳过已分析
+                if skipAnalyzed && analyzedIds.contains(filename) { continue }
+
+                // 如果是图集的同名视频（不应该存在），跳过
+                if imageSetPrefixes.contains(filename) { continue }
+
+                items.append(.video(path: file.path))
+            }
+        } catch {
+            print("[扫描] 扫描视频失败: \(error)")
+        }
+
+        // 5. 添加图集
+        for (prefix, paths) in imageSets {
+            // 跳过已分析
+            if skipAnalyzed && analyzedIds.contains(prefix) { continue }
+            items.append(.imageSet(prefix: prefix, paths: paths))
+        }
+
+        return items
+    }
+
+    /// 分析图集
+    func analyzeImageSet(
+        prefix: String,
+        imagePaths: [String],
+        config: AnalysisConfig
+    ) async -> VideoAnalysis {
+        var result = VideoAnalysis(
+            awemeId: prefix,
+            filePath: imagePaths.first ?? "",
+            tags: [],
+            category: "",
+            summary: "",
+            objects: [],
+            scene: "",
+            sexyLevel: 0,
+            analyzedAt: Date(),
+            isImageSet: true,
+            imageCount: imagePaths.count
+        )
+
+        do {
+            // 1. 采样图片（最多10张）
+            let sampledPaths = sampleImages(imagePaths, maxCount: 10)
+            addLog("[图集] \(prefix) - 共 \(imagePaths.count) 张，采样 \(sampledPaths.count) 张")
+
+            guard !sampledPaths.isEmpty else {
+                result.error = "图集为空"
+                return result
+            }
+
+            // 2. 调用 API
+            addLog("[API] 调用 \(config.provider.displayName) API...")
+            let response: String
+
+            switch config.provider {
+            case .gemini:
+                response = try await callGeminiAPI(apiKey: config.apiKey, endpoint: config.endpoint, model: config.model, imagePaths: sampledPaths)
+            case .grok:
+                response = try await callGrokAPI(apiKey: config.apiKey, endpoint: config.endpoint, model: config.model, imagePaths: sampledPaths)
+            }
+
+            // 3. 解析结果
+            guard let parsed = parseResponse(response) else {
+                result.error = "API 返回内容无法解析"
+                addLog("[错误] 解析失败")
+                return result
+            }
+
+            result.tags = parsed.tags ?? []
+            result.category = parsed.category ?? ""
+            result.summary = parsed.summary ?? ""
+            result.objects = parsed.objects ?? []
+            result.scene = parsed.scene ?? ""
+            result.sexyLevel = parsed.sexy_level ?? 0
+
+            addLog("[完成] \(result.category) | 擦边\(result.sexyLevel) | \(result.tags.prefix(3).joined(separator: ", "))")
+
+        } catch {
+            result.error = error.localizedDescription
+            addLog("[错误] \(error.localizedDescription)")
+        }
+
+        return result
+    }
+
     // MARK: - 调用 Gemini API
 
     private func callGeminiAPI(apiKey: String, endpoint: String, model customModel: String, imagePaths: [URL]) async throws -> String {
@@ -703,6 +904,188 @@ class AnalysisService: ObservableObject {
         }
     }
 
+    // MARK: - 批量分析（支持视频和图集）
+
+    func analyzeItems(
+        items: [AnalysisItem],
+        config: AnalysisConfig,
+        onProgress: @escaping (Int, Int, String) -> Void,
+        completion: @escaping (Int, Int) -> Void
+    ) {
+        guard !isAnalyzing else {
+            addLog("[错误] 已有分析任务在执行")
+            return
+        }
+
+        isAnalyzing = true
+        cancelFlag = false
+        logs.removeAll()
+
+        let videoCount = items.filter { if case .video = $0 { return true } else { return false } }.count
+        let imageSetCount = items.count - videoCount
+
+        progress = (0, items.count)
+
+        addLog("[信息] 开始分析 \(items.count) 个项目 (视频:\(videoCount) 图集:\(imageSetCount))")
+        addLog("[信息] API: \(config.provider.displayName)")
+        if config.rpm > 0 {
+            addLog("[信息] RPM 限制: \(config.rpm) 次/分钟 (间隔 \(String(format: "%.1f", config.requestDelay))秒)")
+        } else {
+            addLog("[信息] 请求间隔: \(String(format: "%.1f", config.requestDelay))秒")
+        }
+
+        if config.concurrency > 1 {
+            addLog("[信息] 并发数: \(config.concurrency)")
+            analyzeItemsParallel(items: items, config: config, onProgress: onProgress, completion: completion)
+        } else {
+            addLog("[信息] 串行模式")
+            analyzeItemsSerial(items: items, config: config, onProgress: onProgress, completion: completion)
+        }
+    }
+
+    /// 分析单个项目（视频或图集）
+    private func analyzeItem(_ item: AnalysisItem, config: AnalysisConfig) async -> VideoAnalysis {
+        switch item {
+        case .video(let path):
+            return await analyzeVideo(videoPath: path, config: config)
+        case .imageSet(let prefix, let paths):
+            return await analyzeImageSet(prefix: prefix, imagePaths: paths, config: config)
+        }
+    }
+
+    // MARK: - 串行分析（支持视频和图集）
+
+    private func analyzeItemsSerial(
+        items: [AnalysisItem],
+        config: AnalysisConfig,
+        onProgress: @escaping (Int, Int, String) -> Void,
+        completion: @escaping (Int, Int) -> Void
+    ) {
+        let total = items.count
+
+        Task {
+            var successCount = 0
+            var failCount = 0
+
+            for (index, item) in items.enumerated() {
+                guard !cancelFlag else { break }
+
+                let displayName = item.displayName
+                await MainActor.run {
+                    currentVideo = displayName
+                    progress = (index + 1, total)
+                    onProgress(index + 1, total, displayName)
+                }
+
+                addLog("[\(index + 1)/\(total)] 分析: \(displayName)")
+
+                let result = await analyzeItem(item, config: config)
+
+                // 保存结果
+                DatabaseService.shared.saveAnalysis(result)
+
+                if result.error == nil {
+                    successCount += 1
+                } else {
+                    failCount += 1
+                }
+
+                // 请求间隔
+                if index < total - 1 && !cancelFlag {
+                    try? await Task.sleep(nanoseconds: UInt64(config.requestDelay * 1_000_000_000))
+                }
+            }
+
+            await MainActor.run {
+                isAnalyzing = false
+                currentVideo = ""
+                addLog("[完成] 分析完成 - 成功: \(successCount), 失败: \(failCount)")
+                completion(successCount, failCount)
+            }
+        }
+    }
+
+    // MARK: - 并发分析（支持视频和图集）
+
+    private func analyzeItemsParallel(
+        items: [AnalysisItem],
+        config: AnalysisConfig,
+        onProgress: @escaping (Int, Int, String) -> Void,
+        completion: @escaping (Int, Int) -> Void
+    ) {
+        let total = items.count
+        let counter = AnalysisCounter()
+
+        Task {
+            await withTaskGroup(of: (Int, VideoAnalysis).self) { group in
+                var runningTasks = 0
+                var nextIndex = 0
+
+                // 初始启动 concurrency 个任务
+                while nextIndex < items.count && runningTasks < config.concurrency {
+                    let index = nextIndex
+                    let item = items[index]
+                    nextIndex += 1
+                    runningTasks += 1
+
+                    group.addTask {
+                        let result = await self.analyzeItem(item, config: config)
+                        return (index, result)
+                    }
+
+                    addLog("[启动] \(item.displayName)")
+                }
+
+                // 处理完成的任务并启动新任务
+                for await (index, result) in group {
+                    guard !cancelFlag else { break }
+
+                    // 保存结果
+                    DatabaseService.shared.saveAnalysis(result)
+
+                    // 更新计数
+                    let counts = await counter.increment(success: result.error == nil)
+
+                    let displayName = items[index].displayName
+                    await MainActor.run {
+                        progress = (counts.completed, total)
+                        onProgress(counts.completed, total, displayName)
+                    }
+
+                    if result.error == nil {
+                        addLog("[完成] \(displayName) - \(result.category)")
+                    } else {
+                        addLog("[失败] \(displayName) - \(result.error ?? "未知错误")")
+                    }
+
+                    // 启动下一个任务
+                    if nextIndex < items.count && !cancelFlag {
+                        let newIndex = nextIndex
+                        let newItem = items[newIndex]
+                        nextIndex += 1
+
+                        group.addTask {
+                            // 请求间隔
+                            try? await Task.sleep(nanoseconds: UInt64(config.requestDelay * 1_000_000_000))
+                            let result = await self.analyzeItem(newItem, config: config)
+                            return (newIndex, result)
+                        }
+
+                        addLog("[启动] \(newItem.displayName)")
+                    }
+                }
+            }
+
+            let finalCounts = await counter.getCounts()
+            await MainActor.run {
+                isAnalyzing = false
+                currentVideo = ""
+                addLog("[完成] 分析完成 - 成功: \(finalCounts.success), 失败: \(finalCounts.fail)")
+                completion(finalCounts.success, finalCounts.fail)
+            }
+        }
+    }
+
     // MARK: - 停止分析
 
     func stopAnalysis() {
@@ -736,6 +1119,38 @@ enum AnalysisError: LocalizedError {
         case .apiError(let code, let msg): return "API 错误 (\(code)): \(msg)"
         case .parseError(let msg): return "解析错误: \(msg)"
         case .frameExtractionFailed: return "帧提取失败"
+        }
+    }
+}
+
+// MARK: - 分析项类型
+
+enum AnalysisItem {
+    case video(path: String)
+    case imageSet(prefix: String, paths: [String])
+
+    var displayName: String {
+        switch self {
+        case .video(let path):
+            return URL(fileURLWithPath: path).lastPathComponent
+        case .imageSet(let prefix, let paths):
+            return "\(prefix) (\(paths.count)张图集)"
+        }
+    }
+
+    var id: String {
+        switch self {
+        case .video(let path):
+            return URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+        case .imageSet(let prefix, _):
+            return prefix
+        }
+    }
+
+    var isImageSet: Bool {
+        switch self {
+        case .video: return false
+        case .imageSet: return true
         }
     }
 }

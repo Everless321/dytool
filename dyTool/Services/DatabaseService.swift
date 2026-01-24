@@ -84,7 +84,7 @@ class DatabaseService: ObservableObject {
         executeSQL(createSettingsTable)
 
         // 迁移：添加 aweme_count 列（如果不存在）
-        executeSQL("ALTER TABLE users ADD COLUMN aweme_count INTEGER")
+        addColumnIfNotExists(table: "users", column: "aweme_count", type: "INTEGER")
 
         // 初始化默认设置
         initDefaultSettings()
@@ -96,6 +96,31 @@ class DatabaseService: ObservableObject {
             sqlite3_step(statement)
         }
         sqlite3_finalize(statement)
+    }
+
+    private func addColumnIfNotExists(table: String, column: String, type: String) {
+        var statement: OpaquePointer?
+        let pragma = "PRAGMA table_info(\(table))"
+
+        if sqlite3_prepare_v2(db, pragma, -1, &statement, nil) == SQLITE_OK {
+            var columnExists = false
+            while sqlite3_step(statement) == SQLITE_ROW {
+                if let namePtr = sqlite3_column_text(statement, 1) {
+                    let name = String(cString: namePtr)
+                    if name == column {
+                        columnExists = true
+                        break
+                    }
+                }
+            }
+            sqlite3_finalize(statement)
+
+            if !columnExists {
+                executeSQL("ALTER TABLE \(table) ADD COLUMN \(column) \(type)")
+            }
+        } else {
+            sqlite3_finalize(statement)
+        }
     }
 
     private func initDefaultSettings() {
@@ -693,7 +718,33 @@ class DatabaseService: ObservableObject {
                 includingPropertiesForKeys: nil,
                 options: [.skipsHiddenFiles]
             )
-            return contents.filter { $0.pathExtension.lowercased() == "mp4" }.count
+
+            // 按作品前缀去重统计（一个作品可能有多个文件）
+            var workPrefixes = Set<String>()
+            let validExtensions = ["mp4", "webp", "jpg", "png"]
+
+            for file in contents {
+                let ext = file.pathExtension.lowercased()
+                guard validExtensions.contains(ext) else { continue }
+
+                let filename = file.deletingPathExtension().lastPathComponent
+
+                // 提取作品前缀：移除 _video, _cover, _image_N, _live_N 后缀
+                var prefix = filename
+                if prefix.hasSuffix("_video") {
+                    prefix = String(prefix.dropLast(6))
+                } else if prefix.hasSuffix("_cover") {
+                    prefix = String(prefix.dropLast(6))
+                } else if let range = prefix.range(of: "_image_\\d+$", options: .regularExpression) {
+                    prefix = String(prefix[..<range.lowerBound])
+                } else if let range = prefix.range(of: "_live_\\d+$", options: .regularExpression) {
+                    prefix = String(prefix[..<range.lowerBound])
+                }
+
+                workPrefixes.insert(prefix)
+            }
+
+            return workPrefixes.count
         } catch {
             return 0
         }

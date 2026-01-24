@@ -24,7 +24,7 @@ struct AnalysisView: View {
     @State private var selectedAuthor: String = ""  // 按作者筛选
 
     // 状态
-    @State private var videosToAnalyze: [String] = []
+    @State private var itemsToAnalyze: [AnalysisItem] = []
     @State private var analysisResults: [VideoAnalysis] = []
     @State private var selectedTab: AnalysisTab = .config
     @State private var availableAuthors: [String] = []  // 可选作者列表
@@ -199,13 +199,21 @@ struct AnalysisView: View {
                     .padding(.vertical, 4)
                 }
 
-                // 视频列表
-                GroupBox("待分析视频 (\(videosToAnalyze.count))") {
+                // 待分析列表
+                GroupBox {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
-                            Button("刷新列表") {
+                            let videoCount = itemsToAnalyze.filter { if case .video = $0 { return true } else { return false } }.count
+                            let imageSetCount = itemsToAnalyze.count - videoCount
+                            Text("待分析 (视频:\(videoCount) 图集:\(imageSetCount))")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+
+                            Button("刷新") {
                                 scanVideos()
                             }
+                            .buttonStyle(.plain)
+                            .foregroundColor(.blue)
 
                             Spacer()
 
@@ -215,20 +223,25 @@ struct AnalysisView: View {
                                 .lineLimit(1)
                         }
 
-                        if videosToAnalyze.isEmpty {
-                            Text("没有找到视频文件")
+                        if itemsToAnalyze.isEmpty {
+                            Text("没有找到可分析的内容")
                                 .foregroundColor(.secondary)
                                 .padding(.vertical, 8)
                         } else {
                             ScrollView {
                                 LazyVStack(alignment: .leading, spacing: 4) {
-                                    ForEach(videosToAnalyze.prefix(50), id: \.self) { path in
-                                        Text(URL(fileURLWithPath: path).lastPathComponent)
-                                            .font(.caption)
-                                            .lineLimit(1)
+                                    ForEach(itemsToAnalyze.prefix(50), id: \.id) { item in
+                                        HStack(spacing: 4) {
+                                            Image(systemName: item.isImageSet ? "photo.stack" : "video")
+                                                .font(.caption2)
+                                                .foregroundColor(item.isImageSet ? .purple : .blue)
+                                            Text(item.displayName)
+                                                .font(.caption)
+                                                .lineLimit(1)
+                                        }
                                     }
-                                    if videosToAnalyze.count > 50 {
-                                        Text("... 还有 \(videosToAnalyze.count - 50) 个视频")
+                                    if itemsToAnalyze.count > 50 {
+                                        Text("... 还有 \(itemsToAnalyze.count - 50) 个项目")
                                             .font(.caption)
                                             .foregroundColor(.secondary)
                                     }
@@ -266,7 +279,7 @@ struct AnalysisView: View {
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(apiKey.isEmpty || videosToAnalyze.isEmpty)
+                    .disabled(apiKey.isEmpty || itemsToAnalyze.isEmpty)
                 }
 
                 Spacer()
@@ -368,47 +381,83 @@ struct AnalysisView: View {
         let downloadDir = URL(fileURLWithPath: downloadPath)
 
         guard FileManager.default.fileExists(atPath: downloadDir.path) else {
-            videosToAnalyze = []
+            itemsToAnalyze = []
             availableAuthors = []
             return
         }
 
-        var videos: [String] = []
+        var items: [AnalysisItem] = []
         var authors = Set<String>()
-        let extensions = ["mp4", "mov", "webm", "m4v"]
+        let videoExtensions = ["mp4", "mov", "webm", "m4v"]
+        let imageExtensions = ["webp", "jpg", "jpeg", "png"]
 
-        if let enumerator = FileManager.default.enumerator(
+        // 获取已分析的 awemeId
+        let analyzedIds: Set<String> = skipAnalyzed ? databaseService.getAnalyzedAwemeIds() : []
+
+        // 遍历子目录（每个子目录是一个作者）
+        if let authorDirs = try? FileManager.default.contentsOfDirectory(
             at: downloadDir,
-            includingPropertiesForKeys: nil,
+            includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) {
-            for case let fileURL as URL in enumerator {
-                if extensions.contains(fileURL.pathExtension.lowercased()) {
-                    // 提取作者名（视频所在文件夹名）
-                    let authorName = fileURL.deletingLastPathComponent().lastPathComponent
-                    authors.insert(authorName)
+            for authorDir in authorDirs {
+                guard (try? authorDir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { continue }
 
-                    // 如果选择了作者，只添加该作者的视频
-                    if selectedAuthor.isEmpty || authorName == selectedAuthor {
-                        videos.append(fileURL.path)
+                let authorName = authorDir.lastPathComponent
+                authors.insert(authorName)
+
+                // 如果选择了作者过滤
+                guard selectedAuthor.isEmpty || authorName == selectedAuthor else { continue }
+
+                // 扫描该作者目录下的内容
+                guard let contents = try? FileManager.default.contentsOfDirectory(
+                    at: authorDir,
+                    includingPropertiesForKeys: nil,
+                    options: [.skipsHiddenFiles]
+                ) else { continue }
+
+                // 1. 识别图集
+                var imageGroups: [String: [String]] = [:]
+                for file in contents {
+                    let ext = file.pathExtension.lowercased()
+                    guard imageExtensions.contains(ext) else { continue }
+
+                    let filename = file.deletingPathExtension().lastPathComponent
+                    if filename.hasSuffix("_cover") { continue }
+
+                    if let range = filename.range(of: "_image_\\d+$", options: .regularExpression) {
+                        let prefix = String(filename[..<range.lowerBound])
+                        if imageGroups[prefix] == nil {
+                            imageGroups[prefix] = []
+                        }
+                        imageGroups[prefix]?.append(file.path)
                     }
+                }
+
+                // 添加图集（跳过已分析）
+                for (prefix, paths) in imageGroups {
+                    if skipAnalyzed && analyzedIds.contains(prefix) { continue }
+                    let sortedPaths = paths.sorted()
+                    items.append(.imageSet(prefix: prefix, paths: sortedPaths))
+                }
+
+                // 2. 识别视频
+                let imageSetPrefixes = Set(imageGroups.keys)
+                for file in contents {
+                    let ext = file.pathExtension.lowercased()
+                    guard videoExtensions.contains(ext) else { continue }
+
+                    let filename = file.deletingPathExtension().lastPathComponent
+                    if skipAnalyzed && analyzedIds.contains(filename) { continue }
+                    if imageSetPrefixes.contains(filename) { continue }
+
+                    items.append(.video(path: file.path))
                 }
             }
         }
 
-        // 更新可选作者列表
         availableAuthors = Array(authors).sorted()
-
-        // 过滤已分析的
-        if skipAnalyzed {
-            let analyzed = databaseService.getAnalyzedAwemeIds()
-            videos = videos.filter { path in
-                let awemeId = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
-                return !analyzed.contains(awemeId)
-            }
-        }
-
-        videosToAnalyze = videos.sorted()
+        itemsToAnalyze = items.sorted { $0.displayName < $1.displayName }
     }
 
     private func startAnalysis() {
@@ -430,8 +479,8 @@ struct AnalysisView: View {
             skipAnalyzed: skipAnalyzed
         )
 
-        analysisService.analyzeVideos(
-            videoPaths: videosToAnalyze,
+        analysisService.analyzeItems(
+            items: itemsToAnalyze,
             config: config,
             onProgress: { current, total, filename in
                 // 进度更新已通过 @Published 自动处理
@@ -453,9 +502,21 @@ struct AnalysisResultRow: View {
         VStack(alignment: .leading, spacing: 8) {
             // 标题行
             HStack {
+                // 图集/视频图标
+                Image(systemName: analysis.isImageSet ? "photo.stack" : "video")
+                    .font(.caption)
+                    .foregroundColor(analysis.isImageSet ? .purple : .blue)
+
                 Text(analysis.awemeId)
                     .font(.headline)
                     .lineLimit(1)
+
+                // 图集数量
+                if analysis.isImageSet && analysis.imageCount > 0 {
+                    Text("(\(analysis.imageCount)张)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
 
                 Spacer()
 

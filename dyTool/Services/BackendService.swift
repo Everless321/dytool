@@ -32,6 +32,7 @@ struct ParsedUserProfile: Codable {
     let awemeCount: Int?
     let favoritingCount: Int?
     let totalFavorited: Int?
+    let homeUrl: String?  // 用户主页 URL
 
     enum CodingKeys: String, CodingKey {
         case secUserId = "sec_user_id"
@@ -44,6 +45,7 @@ struct ParsedUserProfile: Codable {
         case awemeCount = "aweme_count"
         case favoritingCount = "favoriting_count"
         case totalFavorited = "total_favorited"
+        case homeUrl = "home_url"
     }
 }
 

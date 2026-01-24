@@ -18,6 +18,8 @@ struct VideoAnalysis: Identifiable, Codable {
     var sexyLevel: Int
     var analyzedAt: Date?
     var error: String?
+    var isImageSet: Bool = false  // 是否为图集
+    var imageCount: Int = 0       // 图集图片数量
 
     var id: String { awemeId }
 
@@ -48,7 +50,9 @@ struct VideoAnalysis: Identifiable, Codable {
         summary: "",
         objects: [],
         scene: "",
-        sexyLevel: 0
+        sexyLevel: 0,
+        isImageSet: false,
+        imageCount: 0
     )
 }
 

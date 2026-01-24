@@ -25,6 +25,8 @@ struct UserListView: View {
     // 刷新用户信息状态
     @State private var refreshingUsers: Set<String> = []
     @State private var isRefreshingAll = false
+    @State private var refreshProgress: (current: Int, total: Int) = (0, 0)
+    @State private var refreshingUserName: String = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -64,18 +66,27 @@ struct UserListView: View {
 
                 // 刷新所有用户信息
                 if !databaseService.users.isEmpty {
-                    Button {
-                        refreshAllUserInfo()
-                    } label: {
-                        if isRefreshingAll {
+                    if isRefreshingAll {
+                        HStack(spacing: 4) {
                             ProgressView()
-                                .scaleEffect(0.7)
-                        } else {
+                                .controlSize(.small)
+                            Text("\(refreshProgress.current)/\(refreshProgress.total)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(refreshingUserName)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .frame(maxWidth: 80)
+                        }
+                    } else {
+                        Button {
+                            refreshAllUserInfo()
+                        } label: {
                             Image(systemName: "arrow.clockwise")
                         }
+                        .help("刷新用户信息和下载统计")
                     }
-                    .disabled(isRefreshingAll)
-                    .help("刷新所有用户信息")
                 }
 
                 Button {
@@ -159,6 +170,13 @@ struct UserListView: View {
                             }
                         }
                         .contextMenu {
+                            Button {
+                                DownloadState.shared.startDownload(users: [user])
+                            } label: {
+                                Label("开始下载", systemImage: "arrow.down.circle")
+                            }
+                            .disabled(DownloadState.shared.isDownloading)
+
                             Button {
                                 refreshUserInfo(user)
                             } label: {
@@ -268,11 +286,17 @@ struct UserListView: View {
         isRefreshingAll = true
         let cookie = databaseService.getCookie()
         let users = databaseService.users
+        refreshProgress = (0, users.count)
 
         Task {
             var updatedCount = 0
 
-            for user in users {
+            for (index, user) in users.enumerated() {
+                await MainActor.run {
+                    refreshProgress = (index + 1, users.count)
+                    refreshingUserName = user.displayName
+                }
+
                 do {
                     let profile = try await BackendService.shared.parseUser(url: user.url, cookie: cookie)
 
@@ -305,6 +329,8 @@ struct UserListView: View {
 
             await MainActor.run {
                 isRefreshingAll = false
+                refreshingUserName = ""
+                refreshDownloadCounts()
                 if updatedCount > 0 {
                     errorMessage = nil
                 }
@@ -384,7 +410,7 @@ struct UserRowView: View {
                     .overlay {
                         if isRefreshing {
                             ProgressView()
-                                .scaleEffect(0.6)
+                                .controlSize(.small)
                         } else {
                             Text(String(user.displayName.prefix(1)))
                                 .font(.headline)
@@ -495,7 +521,7 @@ struct AddUserSheet: View {
 
                     if isFetching {
                         ProgressView()
-                            .scaleEffect(0.8)
+                            .controlSize(.small)
                     } else if !url.isEmpty {
                         Button {
                             fetchUserInfo()
@@ -630,6 +656,11 @@ struct AddUserSheet: View {
                         BackendService.shared.lastError = nil
                     }
 
+                    // 使用后端返回的用户主页 URL（处理作品链接转换）
+                    if let homeUrl = profile.homeUrl, !homeUrl.isEmpty {
+                        url = homeUrl
+                    }
+
                     // 自动填充昵称
                     if nickname.isEmpty, let name = profile.nickname {
                         nickname = name
@@ -647,8 +678,10 @@ struct AddUserSheet: View {
 
     private func isValidDouyinUrl(_ url: String) -> Bool {
         let patterns = [
-            #"https://v\.douyin\.com/[A-Za-z0-9]+/?"#,
-            #"https://www\.douyin\.com/user/[A-Za-z0-9_-]+"#
+            #"https://v\.douyin\.com/[A-Za-z0-9_-]+/?"#,  // 短链接
+            #"https://www\.douyin\.com/user/[A-Za-z0-9_-]+"#,  // 用户主页
+            #"https://www\.douyin\.com/video/[0-9]+"#,  // 视频作品
+            #"https://www\.douyin\.com/note/[0-9]+"#,  // 图文作品
         ]
 
         for pattern in patterns {
@@ -663,8 +696,10 @@ struct AddUserSheet: View {
         guard let pasteboardString = NSPasteboard.general.string(forType: .string) else { return }
 
         let patterns = [
-            #"https://v\.douyin\.com/[A-Za-z0-9]+/?"#,
-            #"https://www\.douyin\.com/user/[A-Za-z0-9_-]+"#
+            #"https://v\.douyin\.com/[A-Za-z0-9_-]+/?"#,  // 短链接（用户主页或作品）
+            #"https://www\.douyin\.com/user/[A-Za-z0-9_-]+"#,  // 用户主页
+            #"https://www\.douyin\.com/video/[0-9]+"#,  // 视频作品
+            #"https://www\.douyin\.com/note/[0-9]+"#,  // 图文作品
         ]
 
         for pattern in patterns {
