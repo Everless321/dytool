@@ -16,6 +16,14 @@ struct DownloadView: View {
     @State private var selectedUserIds: Set<String> = []
     @State private var showUserSelection = true
 
+    // 搜索与筛选
+    @State private var searchText = ""
+    @State private var filterMode: UserFilterMode = .all
+    @State private var sortMode: UserSortMode = .default
+
+    // 下载统计缓存
+    @State private var downloadCounts: [String: Int] = [:]
+
     var body: some View {
         VStack(spacing: 0) {
             statusCard
@@ -30,6 +38,7 @@ struct DownloadView: View {
         }
         .onAppear {
             selectedUserIds = Set(databaseService.users.map { $0.id })
+            refreshDownloadCounts()
         }
         .onChange(of: databaseService.users) { _, newUsers in
             let currentIds = Set(newUsers.map { $0.id })
@@ -37,12 +46,83 @@ struct DownloadView: View {
             if selectedUserIds.isEmpty {
                 selectedUserIds = currentIds
             }
+            refreshDownloadCounts()
         }
+        .onChange(of: downloadState.isDownloading) { _, isDownloading in
+            if !isDownloading {
+                refreshDownloadCounts()
+            }
+        }
+    }
+
+    private func refreshDownloadCounts() {
+        downloadCounts = databaseService.getAllDownloadedCounts()
     }
 
     // 计算选中的用户
     private var selectedUsers: [DouyinUser] {
         databaseService.users.filter { selectedUserIds.contains($0.id) }
+    }
+
+    // 筛选和排序后的用户列表
+    private var filteredAndSortedUsers: [DouyinUser] {
+        var users = databaseService.users
+
+        // 搜索过滤
+        if !searchText.isEmpty {
+            users = users.filter { user in
+                user.displayName.localizedCaseInsensitiveContains(searchText)
+            }
+        }
+
+        // 状态筛选
+        switch filterMode {
+        case .all:
+            break
+        case .incomplete:
+            users = users.filter { user in
+                let downloaded = downloadCounts[user.id] ?? 0
+                let total = user.awemeCount ?? 0
+                return total == 0 || downloaded < total
+            }
+        case .completed:
+            users = users.filter { user in
+                let downloaded = downloadCounts[user.id] ?? 0
+                let total = user.awemeCount ?? 0
+                return total > 0 && downloaded >= total
+            }
+        }
+
+        // 排序
+        switch sortMode {
+        case .default:
+            break
+        case .progressAsc:
+            users.sort { u1, u2 in
+                let p1 = userProgress(u1)
+                let p2 = userProgress(u2)
+                return p1 < p2
+            }
+        case .progressDesc:
+            users.sort { u1, u2 in
+                let p1 = userProgress(u1)
+                let p2 = userProgress(u2)
+                return p1 > p2
+            }
+        case .countDesc:
+            users.sort { ($0.awemeCount ?? 0) > ($1.awemeCount ?? 0) }
+        case .countAsc:
+            users.sort { ($0.awemeCount ?? 0) < ($1.awemeCount ?? 0) }
+        }
+
+        return users
+    }
+
+    private func userProgress(_ user: DouyinUser) -> Double {
+        let downloaded = downloadCounts[user.id] ?? 0
+        let total = user.awemeCount ?? 0
+        guard total > 0 else { return 0 }
+        return Double(downloaded) / Double(total)
     }
 
     // MARK: - 状态卡片
@@ -150,87 +230,294 @@ struct DownloadView: View {
 
     private var userSelectionPanel: some View {
         VStack(spacing: 0) {
-            HStack {
-                Button {
-                    withAnimation {
-                        showUserSelection.toggle()
-                    }
-                } label: {
-                    HStack {
-                        Image(systemName: showUserSelection ? "chevron.down" : "chevron.right")
-                            .font(.caption)
-                        Text("选择下载用户")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                    }
-                }
-                .buttonStyle(.plain)
-
-                Spacer()
-
-                Text("\(selectedUsers.count) / \(databaseService.users.count)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-
-                Button {
-                    if selectedUserIds.count == databaseService.users.count {
-                        selectedUserIds.removeAll()
-                    } else {
-                        selectedUserIds = Set(databaseService.users.map { $0.id })
-                    }
-                } label: {
-                    Text(selectedUserIds.count == databaseService.users.count ? "取消全选" : "全选")
-                        .font(.caption)
-                }
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
+            // 标题栏
+            userSelectionHeader
 
             if showUserSelection {
                 Divider()
+                // 搜索和筛选工具栏
+                userSelectionToolbar
+                Divider()
+                // 用户列表
                 userList
             }
         }
         .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
     }
 
-    private var userList: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(databaseService.users) { user in
-                    userRow(user: user)
+    private var userSelectionHeader: some View {
+        HStack {
+            Button {
+                withAnimation {
+                    showUserSelection.toggle()
+                }
+            } label: {
+                HStack {
+                    Image(systemName: showUserSelection ? "chevron.down" : "chevron.right")
+                        .font(.caption)
+                    Text("选择下载用户")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
                 }
             }
-        }
-        .frame(maxHeight: 200)
-    }
-
-    private func userRow(user: DouyinUser) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: selectedUserIds.contains(user.id) ? "checkmark.circle.fill" : "circle")
-                .foregroundColor(selectedUserIds.contains(user.id) ? .accentColor : .secondary)
-
-            Circle()
-                .fill(Color.blue.opacity(0.2))
-                .frame(width: 28, height: 28)
-                .overlay {
-                    Text(String(user.displayName.prefix(1)))
-                        .font(.caption)
-                        .foregroundColor(.blue)
-                }
-
-            Text(user.displayName)
-                .font(.subheadline)
-                .lineLimit(1)
+            .buttonStyle(.plain)
 
             Spacer()
 
-            Text(user.maxCounts == 0 ? "不限" : "\(user.maxCounts)个")
+            // 选中统计
+            let visibleSelected = filteredAndSortedUsers.filter { selectedUserIds.contains($0.id) }.count
+            Text("\(visibleSelected) 选中 / \(filteredAndSortedUsers.count) 显示 / \(databaseService.users.count) 总计")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
         .padding(.horizontal)
-        .padding(.vertical, 6)
+        .padding(.vertical, 8)
+    }
+
+    private var userSelectionToolbar: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                // 搜索框
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.secondary)
+                    TextField("搜索用户...", text: $searchText)
+                        .textFieldStyle(.plain)
+                    if !searchText.isEmpty {
+                        Button {
+                            searchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color(NSColor.textBackgroundColor))
+                .cornerRadius(6)
+
+                // 排序菜单
+                Menu {
+                    Button("默认顺序") { sortMode = .default }
+                        .disabled(sortMode == .default)
+                    Divider()
+                    Button("进度 ↑ 低到高") { sortMode = .progressAsc }
+                    Button("进度 ↓ 高到低") { sortMode = .progressDesc }
+                    Divider()
+                    Button("作品数 ↑ 少到多") { sortMode = .countAsc }
+                    Button("作品数 ↓ 多到少") { sortMode = .countDesc }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.up.arrow.down")
+                        Text(sortMode.label)
+                            .lineLimit(1)
+                    }
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color(NSColor.controlBackgroundColor))
+                    .cornerRadius(6)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+
+            HStack(spacing: 8) {
+                // 筛选按钮组
+                ForEach(UserFilterMode.allCases, id: \.self) { mode in
+                    Button {
+                        filterMode = mode
+                    } label: {
+                        Text(mode.label)
+                            .font(.caption)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(filterMode == mode ? Color.accentColor : Color(NSColor.controlBackgroundColor))
+                            .foregroundColor(filterMode == mode ? .white : .primary)
+                            .cornerRadius(6)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Spacer()
+
+                // 快捷操作
+                Menu {
+                    Button("全选当前列表") {
+                        selectAllVisible()
+                    }
+                    Button("取消选择当前列表") {
+                        deselectAllVisible()
+                    }
+                    Divider()
+                    Button("选择未完成的") {
+                        selectIncomplete()
+                    }
+                    Button("选择已完成的") {
+                        selectCompleted()
+                    }
+                    Divider()
+                    Button("全选所有") {
+                        selectedUserIds = Set(databaseService.users.map { $0.id })
+                    }
+                    Button("清空选择") {
+                        selectedUserIds.removeAll()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checklist")
+                        Text("快捷选择")
+                    }
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color(NSColor.controlBackgroundColor))
+                    .cornerRadius(6)
+                }
+                .menuStyle(.borderlessButton)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+    }
+
+    private func selectAllVisible() {
+        for user in filteredAndSortedUsers {
+            selectedUserIds.insert(user.id)
+        }
+    }
+
+    private func deselectAllVisible() {
+        for user in filteredAndSortedUsers {
+            selectedUserIds.remove(user.id)
+        }
+    }
+
+    private func selectIncomplete() {
+        selectedUserIds.removeAll()
+        for user in databaseService.users {
+            let downloaded = downloadCounts[user.id] ?? 0
+            let total = user.awemeCount ?? 0
+            if total == 0 || downloaded < total {
+                selectedUserIds.insert(user.id)
+            }
+        }
+    }
+
+    private func selectCompleted() {
+        selectedUserIds.removeAll()
+        for user in databaseService.users {
+            let downloaded = downloadCounts[user.id] ?? 0
+            let total = user.awemeCount ?? 0
+            if total > 0 && downloaded >= total {
+                selectedUserIds.insert(user.id)
+            }
+        }
+    }
+
+    private var userList: some View {
+        Group {
+            if filteredAndSortedUsers.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "person.slash")
+                        .font(.title2)
+                        .foregroundColor(.secondary)
+                    Text(searchText.isEmpty ? "没有符合条件的用户" : "未找到 \"\(searchText)\"")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 80)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(filteredAndSortedUsers) { user in
+                            userRow(user: user)
+                            if user.id != filteredAndSortedUsers.last?.id {
+                                Divider().padding(.leading, 52)
+                            }
+                        }
+                    }
+                }
+                .frame(minHeight: 100, maxHeight: 300)
+            }
+        }
+    }
+
+    private func userRow(user: DouyinUser) -> some View {
+        let downloaded = downloadCounts[user.id] ?? 0
+        let total = user.awemeCount ?? 0
+        let progress = total > 0 ? Double(downloaded) / Double(total) : 0
+        let isComplete = total > 0 && downloaded >= total
+
+        return HStack(spacing: 12) {
+            // 选择框
+            Image(systemName: selectedUserIds.contains(user.id) ? "checkmark.circle.fill" : "circle")
+                .font(.title3)
+                .foregroundColor(selectedUserIds.contains(user.id) ? .accentColor : .secondary)
+
+            // 头像
+            Circle()
+                .fill(isComplete ? Color.green.opacity(0.2) : Color.blue.opacity(0.2))
+                .frame(width: 32, height: 32)
+                .overlay {
+                    Text(String(user.displayName.prefix(1)))
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(isComplete ? .green : .blue)
+                }
+
+            // 用户信息
+            VStack(alignment: .leading, spacing: 2) {
+                Text(user.displayName)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+
+                HStack(spacing: 8) {
+                    // 下载进度
+                    if total > 0 {
+                        HStack(spacing: 4) {
+                            ProgressView(value: progress)
+                                .progressViewStyle(.linear)
+                                .frame(width: 60)
+                            Text("\(downloaded)/\(total)")
+                                .font(.caption2)
+                                .foregroundColor(isComplete ? .green : .secondary)
+                        }
+                    } else if downloaded > 0 {
+                        Text("已下载 \(downloaded)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("未下载")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+
+                    // 下载限制
+                    Text(user.maxCounts == 0 ? "不限" : "限\(user.maxCounts)")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color(NSColor.controlBackgroundColor))
+                        .cornerRadius(3)
+                }
+            }
+
+            Spacer()
+
+            // 完成状态标记
+            if isComplete {
+                Image(systemName: "checkmark.seal.fill")
+                    .foregroundColor(.green)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
         .contentShape(Rectangle())
         .onTapGesture {
             if selectedUserIds.contains(user.id) {
@@ -239,7 +526,7 @@ struct DownloadView: View {
                 selectedUserIds.insert(user.id)
             }
         }
-        .background(selectedUserIds.contains(user.id) ? Color.accentColor.opacity(0.1) : Color.clear)
+        .background(selectedUserIds.contains(user.id) ? Color.accentColor.opacity(0.08) : Color.clear)
     }
 
     // MARK: - 日志区域
@@ -403,6 +690,42 @@ struct LogRowView: View {
         case .success: return .green
         case .warning: return .orange
         case .error: return .red
+        }
+    }
+}
+
+// MARK: - 用户筛选模式
+
+enum UserFilterMode: CaseIterable {
+    case all
+    case incomplete
+    case completed
+
+    var label: String {
+        switch self {
+        case .all: return "全部"
+        case .incomplete: return "未完成"
+        case .completed: return "已完成"
+        }
+    }
+}
+
+// MARK: - 用户排序模式
+
+enum UserSortMode {
+    case `default`
+    case progressAsc
+    case progressDesc
+    case countAsc
+    case countDesc
+
+    var label: String {
+        switch self {
+        case .default: return "默认"
+        case .progressAsc: return "进度↑"
+        case .progressDesc: return "进度↓"
+        case .countAsc: return "作品↑"
+        case .countDesc: return "作品↓"
         }
     }
 }
