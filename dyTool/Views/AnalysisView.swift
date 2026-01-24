@@ -390,68 +390,101 @@ struct AnalysisView: View {
         var authors = Set<String>()
         let videoExtensions = ["mp4", "mov", "webm", "m4v"]
         let imageExtensions = ["webp", "jpg", "jpeg", "png"]
+        let knownModes = ["post", "like", "collection", "collects", "mix", "music"]
 
         // 获取已分析的 awemeId
         let analyzedIds: Set<String> = skipAnalyzed ? databaseService.getAnalyzedAwemeIds() : []
 
-        // 遍历子目录（每个子目录是一个作者）
-        if let authorDirs = try? FileManager.default.contentsOfDirectory(
+        // f2 目录结构: Downloads/douyin/{mode}/{author}/
+        // 遍历平台目录（douyin）
+        guard let platformDirs = try? FileManager.default.contentsOfDirectory(
             at: downloadDir,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
-        ) {
-            for authorDir in authorDirs {
-                guard (try? authorDir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { continue }
+        ) else {
+            itemsToAnalyze = []
+            availableAuthors = []
+            return
+        }
 
-                let authorName = authorDir.lastPathComponent
-                authors.insert(authorName)
+        for platformDir in platformDirs {
+            guard (try? platformDir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { continue }
+            // 跳过非平台目录（如 logs）
+            let platformName = platformDir.lastPathComponent
+            guard platformName == "douyin" else { continue }
 
-                // 如果选择了作者过滤
-                guard selectedAuthor.isEmpty || authorName == selectedAuthor else { continue }
+            // 遍历模式目录（post, like 等）
+            guard let modeDirs = try? FileManager.default.contentsOfDirectory(
+                at: platformDir,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            ) else { continue }
 
-                // 扫描该作者目录下的内容
-                guard let contents = try? FileManager.default.contentsOfDirectory(
-                    at: authorDir,
-                    includingPropertiesForKeys: nil,
+            for modeDir in modeDirs {
+                guard (try? modeDir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { continue }
+                let modeName = modeDir.lastPathComponent
+                guard knownModes.contains(modeName) else { continue }
+
+                // 遍历作者目录
+                guard let authorDirs = try? FileManager.default.contentsOfDirectory(
+                    at: modeDir,
+                    includingPropertiesForKeys: [.isDirectoryKey],
                     options: [.skipsHiddenFiles]
                 ) else { continue }
 
-                // 1. 识别图集
-                var imageGroups: [String: [String]] = [:]
-                for file in contents {
-                    let ext = file.pathExtension.lowercased()
-                    guard imageExtensions.contains(ext) else { continue }
+                for authorDir in authorDirs {
+                    guard (try? authorDir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { continue }
 
-                    let filename = file.deletingPathExtension().lastPathComponent
-                    if filename.hasSuffix("_cover") { continue }
+                    let authorName = authorDir.lastPathComponent
+                    authors.insert(authorName)
 
-                    if let range = filename.range(of: "_image_\\d+$", options: .regularExpression) {
-                        let prefix = String(filename[..<range.lowerBound])
-                        if imageGroups[prefix] == nil {
-                            imageGroups[prefix] = []
+                    // 如果选择了作者过滤
+                    guard selectedAuthor.isEmpty || authorName == selectedAuthor else { continue }
+
+                    // 扫描该作者目录下的内容
+                    guard let contents = try? FileManager.default.contentsOfDirectory(
+                        at: authorDir,
+                        includingPropertiesForKeys: nil,
+                        options: [.skipsHiddenFiles]
+                    ) else { continue }
+
+                    // 1. 识别图集
+                    var imageGroups: [String: [String]] = [:]
+                    for file in contents {
+                        let ext = file.pathExtension.lowercased()
+                        guard imageExtensions.contains(ext) else { continue }
+
+                        let filename = file.deletingPathExtension().lastPathComponent
+                        if filename.hasSuffix("_cover") { continue }
+
+                        if let range = filename.range(of: "_image_\\d+$", options: .regularExpression) {
+                            let prefix = String(filename[..<range.lowerBound])
+                            if imageGroups[prefix] == nil {
+                                imageGroups[prefix] = []
+                            }
+                            imageGroups[prefix]?.append(file.path)
                         }
-                        imageGroups[prefix]?.append(file.path)
                     }
-                }
 
-                // 添加图集（跳过已分析）
-                for (prefix, paths) in imageGroups {
-                    if skipAnalyzed && analyzedIds.contains(prefix) { continue }
-                    let sortedPaths = paths.sorted()
-                    items.append(.imageSet(prefix: prefix, paths: sortedPaths))
-                }
+                    // 添加图集（跳过已分析）
+                    for (prefix, paths) in imageGroups {
+                        if skipAnalyzed && analyzedIds.contains(prefix) { continue }
+                        let sortedPaths = paths.sorted()
+                        items.append(.imageSet(prefix: prefix, paths: sortedPaths))
+                    }
 
-                // 2. 识别视频
-                let imageSetPrefixes = Set(imageGroups.keys)
-                for file in contents {
-                    let ext = file.pathExtension.lowercased()
-                    guard videoExtensions.contains(ext) else { continue }
+                    // 2. 识别视频
+                    let imageSetPrefixes = Set(imageGroups.keys)
+                    for file in contents {
+                        let ext = file.pathExtension.lowercased()
+                        guard videoExtensions.contains(ext) else { continue }
 
-                    let filename = file.deletingPathExtension().lastPathComponent
-                    if skipAnalyzed && analyzedIds.contains(filename) { continue }
-                    if imageSetPrefixes.contains(filename) { continue }
+                        let filename = file.deletingPathExtension().lastPathComponent
+                        if skipAnalyzed && analyzedIds.contains(filename) { continue }
+                        if imageSetPrefixes.contains(filename) { continue }
 
-                    items.append(.video(path: file.path))
+                        items.append(.video(path: file.path))
+                    }
                 }
             }
         }
